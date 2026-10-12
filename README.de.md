@@ -7,7 +7,7 @@ Zwei Dinge, die Ihr Coding-Agent nicht für Sie erledigt — erledigt, während 
 - **Fenster offen halten** — sobald das letzte Nutzungsfenster zurückgesetzt wird, öffnet sich ein neues, auch wenn gerade niemand arbeitet; wenn Sie zurückkommen, läuft schon ein volles Kontingent.
 - **Benachrichtigen** — funktioniert das nicht mehr, sagt es Ihnen Bescheid: Bark, ntfy, E-Mail oder was immer Sie anschließen möchten.
 
-Eine Sitzung nach einem Nutzungslimit wieder aufzunehmen, erledigen die Agenten inzwischen selbst, also überlässt Claude Plus ihnen das.
+Eine Sitzung nach einem Nutzungslimit wieder aufzunehmen, erledigen die Agenten inzwischen selbst; wenn das ausbleibt, übernimmt Claude Plus es für sie (siehe Fortsetzen unten).
 
 ## Agenten
 
@@ -15,7 +15,7 @@ Claude Code, Codex und Antigravity messen ein Abo auf dieselbe Weise: ein kurzes
 
 | Agent | Woher die Limits kommen | Änderungen an seiner Konfiguration |
 |---|---|---|
-| Claude Code | seine Status Line, bei jeder Aktualisierung | ein Status-Line-Eintrag |
+| Claude Code | seine Status Line, bei jeder Aktualisierung | ein Status-Line-Eintrag, ein Hook |
 | Codex | seine Sitzungsprotokolle, bei Bedarf gelesen | keine |
 | Antigravity | seine Status Line, bei jeder Aktualisierung | ein Status-Line-Eintrag |
 
@@ -31,7 +31,7 @@ Jeder Agent bekommt sein eigenes Fenster, seinen eigenen Zeitplan und seine eige
 
 ## Voraussetzungen
 
-Linux mit `jq`, `at` (mit laufendem `atd`), `flock`, `timeout`, GNU `date` und mindestens einem von `claude`, `codex` oder `agy`.
+Linux mit `jq`, `at` (mit laufendem `atd`), `flock`, `timeout`, GNU `date` und mindestens einem von `claude`, `codex` oder `agy`. Für Fortsetzen wird `tmux` gebraucht.
 
 ```bash
 sudo systemctl enable --now atd
@@ -51,7 +51,7 @@ cd claude-plus
 bash install-claude-plus.sh
 ```
 
-Für jeden Agenten mit einer Status Line legt sich der Installer um die, die Sie bereits hatten, und die wird genau wie bisher angezeigt; das ist die einzige Änderung an den Einstellungen jenes Agenten, und jede Einstellungsdatei wird zuvor gesichert. Codex braucht überhaupt keine Konfiguration. Ein erneuter Lauf ist ein sauberes Upgrade statt einer zweiten Installation und übernimmt für jeden Agenten den nächsten geplanten Lauf, seinen Zustand und Ihren Benachrichtiger.
+Für jeden Agenten mit einer Status Line legt sich der Installer um die, die Sie bereits hatten, und die wird genau wie bisher angezeigt; das ist, neben einem Hook für Claude Code (siehe Fortsetzen), die einzige Änderung an den Einstellungen jenes Agenten, und jede Einstellungsdatei wird zuvor gesichert. Codex braucht überhaupt keine Konfiguration. Ein erneuter Lauf ist ein sauberes Upgrade statt einer zweiten Installation und übernimmt für jeden Agenten den nächsten geplanten Lauf, seinen Zustand und Ihren Benachrichtiger.
 
 ## Verwendung
 
@@ -85,9 +85,15 @@ Ein Fenster zu öffnen kostet eine Anfrage, also hält Claude Plus sie so klein 
 ~/.claude/claude-plus/claude-plus.sh model claude auto     # zurück zum günstigsten
 ```
 
+## Fortsetzen
+
+Claude Code nimmt eine Sitzung von selbst wieder auf, wenn ein Nutzungslimit zurückgesetzt wird („Continue automatically at usage limit“ in `/config`). Manchmal passiert das nicht — eine versehentliche Taste hat den Countdown abgebrochen, oder er ist nie gestartet — und die Sitzung steht, bis Sie es bemerken. Claude Plus ist das Netz darunter: Es merkt sich jede Sitzung, die an einem Limit stehen bleibt, und schaut drei Minuten nach dem Reset noch einmal nach. Steht sie immer noch, tippt es `continue` in ihr tmux-Pane.
+
+Ansonsten hält es sich heraus. Getippt wird nichts, wenn Claude Code oder Sie schon weitergemacht haben, wenn Sie den Countdown mit Esc abgebrochen haben oder wenn im Pane inzwischen etwas anderes läuft; nach höchstens zwei Versuchen sagt es Ihnen Bescheid. Eine Sitzung außerhalb von tmux bietet nichts, wohin getippt werden könnte, also wird sie nur protokolliert.
+
 ## Benachrichtigungen
 
-Claude Plus bleibt still, solange nichts Ihre Aufmerksamkeit braucht, und meldet fünf Dinge:
+Claude Plus bleibt still, solange nichts Ihre Aufmerksamkeit braucht, und meldet sechs Dinge:
 
 | | |
 |---|---|
@@ -96,8 +102,9 @@ Claude Plus bleibt still, solange nichts Ihre Aufmerksamkeit braucht, und meldet
 | **Planer steht** | Ein geplanter Lauf ist längst überfällig, es wird also kein Fenster offen gehalten; meist läuft `atd` nicht |
 | **Wieder normal** | Es hat sich von einem der obigen Probleme erholt |
 | **Warm-up-Modell verschwunden** | Das Modell, mit dem ein Agent aufgewärmt wurde, gibt es nicht mehr; ab jetzt wird sein eigenes Standardmodell verwendet |
+| **Nicht fortgesetzt** | Eine Sitzung stand nach dem Reset ihres Nutzungslimits immer noch, und auch ein getipptes `continue` hat sie nicht in Gang gebracht |
 
-Jede Meldung kommt einmal je Agent, nicht bei jedem Wiederholungsversuch — ein nächtliches Problem kostet Sie also eine einzige Nachricht. Ein Fehler, der von selbst vergeht, kostet gar keine: Dass ein Agent abgemeldet ist, wird erst gemeldet, wenn auch ein späterer Versuch fehlschlägt. Über Nutzungslimits selbst wird nie berichtet: Sie sind Alltag, und die Agenten machen danach von selbst weiter.
+Jede Meldung kommt einmal je Agent, nicht bei jedem Wiederholungsversuch — ein nächtliches Problem kostet Sie also eine einzige Nachricht. Ein Fehler, der von selbst vergeht, kostet gar keine: Dass ein Agent abgemeldet ist, wird erst gemeldet, wenn auch ein späterer Versuch fehlschlägt. Über Nutzungslimits selbst wird nie berichtet: Sie sind Alltag, und die Agenten — oder Claude Plus hinter ihnen — machen danach weiter.
 
 Um zu wählen, wie Sie davon erfahren, kopieren Sie eine der Vorlagen und tragen Ihren eigenen Schlüssel oder Server ein:
 

@@ -476,8 +476,8 @@ fi
 KEEP=("$(basename "$STATE")" "$(basename "$NOTIFY")" "$(basename "$ANCHOR")" "claude-plus.log")
 remove_installation "${KEEP[@]}"
 
-# Versions before 3.0.0 resumed rate-limited sessions themselves. Claude Code
-# now does that on its own, so their queue of sessions has no reader.
+# Versions before 3.0.0 kept their own queue of rate-limited sessions here.
+# Resume came back in 4.2.0 as a backstop, with its queue under each agent.
 rm -rf "$STATE/pending" "$STATE/stale"
 
 mkdir -p "$BASE" "$STATE" "$PROVIDERS"
@@ -522,7 +522,7 @@ cat > "$BIN" <<'CLAUDE_PLUS'
 # option) any later version. See the LICENSE file for details.
 set -u
 
-VERSION="4.1.1"
+VERSION="4.2.0"
 
 BASE="$HOME/.claude/claude-plus"
 STATE="$BASE/state"
@@ -534,6 +534,8 @@ SELF="$BASE/claude-plus.sh"
 
 DEFAULT_WINDOW=18000
 STALL_GRACE=300
+RESUME_GRACE=180
+RESUME_VERIFY=90
 
 mkdir -p "$STATE"
 
@@ -604,6 +606,11 @@ default_cheap_model() {
 # and go; an agent that has dropped one says so plainly.
 default_unknown_model() {
     grep -Eqi 'unrecognized_model|unknown model|model.*(does not exist|may not exist|not found|described by this version)'
+}
+
+# Without a way to read a session, never claim it is stuck
+default_stuck() {
+    return 1
 }
 
 default_parse_limits() {
@@ -1135,6 +1142,196 @@ scheduled() {
     do_warmup "$id" || true
 }
 
+# ------------------------------------------------------------------- resume
+#
+# Agents pick a session back up after a usage limit themselves, and that
+# always goes first. This is the backstop for when they do not: the countdown
+# was cancelled by a stray key, or never started. A provider with `resume`
+# reports a session that stopped on a limit (its `stuck` function reads the
+# session's transcript), and if that session is still stopped RESUME_GRACE
+# seconds after the reset, Claude Plus types `continue` into its tmux pane.
+
+# When a process started, in clock ticks since boot. Together with the pid it
+# names one process, even once the pid has been reused.
+process_start() {
+    local stat
+
+    [[ "${1:-}" =~ ^[0-9]+$ ]] || return 0
+    stat="$(cat "/proc/$1/stat" 2>/dev/null)" || return 0
+
+    # Field 22. The command name in field 2 may hold spaces, so cut past ") "
+    stat="${stat##*) }"
+    awk '{print $20}' <<< "$stat"
+}
+
+# The foreground process group of the terminal a pane's first process sits
+# on: in practice the agent the user is running in that pane.
+foreground_pgid() {
+    [[ "${1:-}" =~ ^[0-9]+$ ]] || return 0
+    ps -o tpgid= -p "$1" 2>/dev/null | tr -d ' '
+}
+
+# When to look again at a session stopped on a limit: once the window that
+# stopped it has reset, and the agent has had its chance to continue
+resume_due() {
+    local id="$1" now reset
+    now="$(date +%s)"
+
+    if is_long_limited "$id"; then
+        reset="$(pget "$id" long_resets_at)"
+    else
+        reset="$(pget "$id" resets_at)"
+    fi
+
+    # ponytail: an unknown reset just looks again after the grace; the
+    # attempt cap in resume() stops that from repeating forever
+    [[ "$reset" =~ ^[0-9]+$ ]] && (( reset > now )) || reset="$now"
+    printf '%s\n' "$((reset + RESUME_GRACE))"
+}
+
+# One resume job per provider, at the earliest time any session needs it. A
+# job already queued for earlier is kept, and re-arms for the rest when it runs.
+arm_resume() {
+    local id="$1" target="$2" now job old output
+    now="$(date +%s)"
+    (( target > now )) || target=$((now + 5))
+
+    job="$(pget "$id" resume_job)"
+    old="$(pget "$id" resume_target)"
+
+    if [[ "$old" =~ ^[0-9]+$ ]] && (( old > now && old <= target )) && job_exists "$job"; then
+        return 0
+    fi
+    job_exists "$job" && atrm "$job" >/dev/null 2>&1
+
+    output="$(
+        printf '%q resume %q\n' "$SELF" "$id" |
+            LC_ALL=C at -t "$(date -d "@$target" '+%Y%m%d%H%M.%S')" 2>&1
+    )" || {
+        log "[$id] Failed to schedule resume job: $output"
+        return 1
+    }
+
+    pset "$id" resume_job "$(awk '/^job [0-9]+ / {print $2; exit}' <<< "$output")"
+    pset "$id" resume_target "$target"
+}
+
+# Hook: a turn in this agent stopped on a usage limit. Remember which tmux pane
+# the session runs in and which process holds it, so nothing is ever typed
+# into a pane that has since moved on to something else.
+rate_limit() {
+    local id="$1" input session transcript file dir attempts=0
+    input="$(cat)"
+
+    session="$(jq -r '.session_id // empty' <<< "$input" 2>/dev/null)"
+    transcript="$(jq -r '.transcript_path // empty' <<< "$input" 2>/dev/null)"
+    [[ -n "$session" && -n "$transcript" ]] || return 0
+
+    if [[ -z "${TMUX:-}" || -z "${TMUX_PANE:-}" ]]; then
+        log "[$id] Usage limit hit session=$session outside tmux; it cannot be resumed from here"
+        return 0
+    fi
+
+    local socket="${TMUX%%,*}" pane="$TMUX_PANE" pane_pid fg
+    pane_pid="$(tmux -S "$socket" display-message -p -t "$pane" '#{pane_pid}' 2>/dev/null)"
+    fg="$(foreground_pgid "$pane_pid")"
+
+    dir="$(pstate "$id")/pending"
+    mkdir -p "$dir"
+    file="$dir/$(printf '%s' "$session" | tr -c 'A-Za-z0-9._-' '_').json"
+
+    # The same session hitting the limit again, after we typed continue too
+    # early, keeps its count so it cannot be retried forever
+    [[ -f "$file" ]] && attempts="$(jq -r '.attempts // 0' "$file" 2>/dev/null)"
+    [[ "$attempts" =~ ^[0-9]+$ ]] || attempts=0
+
+    jq -n --arg session "$session" --arg transcript "$transcript" \
+        --arg socket "$socket" --arg pane "$pane" --arg pane_pid "$pane_pid" \
+        --arg fg "$fg" --arg fg_start "$(process_start "$fg")" \
+        --argjson due "$(resume_due "$id")" --argjson attempts "$attempts" \
+        '{session: $session, transcript: $transcript, socket: $socket, pane: $pane,
+          pane_pid: $pane_pid, fg: $fg, fg_start: $fg_start, due: $due, attempts: $attempts}' \
+        > "$file.tmp.$$" && mv "$file.tmp.$$" "$file"
+
+    log "[$id] Usage limit hit session=$session pane=$pane; checking again at $(date -d "@$(jq -r .due "$file")" '+%Y-%m-%d %H:%M:%S')"
+    arm_resume "$id" "$(jq -r .due "$file")"
+}
+
+resume() {
+    local id="$1" dir file now
+    dir="$(pstate "$id")"
+    mkdir -p "$dir/pending"
+
+    exec 6>"$dir/resume.lock"
+    flock 6
+
+    shopt -s nullglob
+    for file in "$dir"/pending/*.json; do
+        local session transcript socket pane pane_pid fg fg_start due attempts current fields
+        now="$(date +%s)"
+
+        if ! fields="$(jq -er '@sh "session=\(.session) transcript=\(.transcript) socket=\(.socket) pane=\(.pane) pane_pid=\(.pane_pid) fg=\(.fg) fg_start=\(.fg_start) due=\(.due) attempts=\(.attempts)"' "$file" 2>/dev/null)"; then
+            rm -f "$file"
+            continue
+        fi
+        eval "$fields"
+
+        # The agent continued on its own, the user did, or the user cancelled
+        # the agent's countdown on purpose. All of them are the user's call.
+        if ! provider_call "$id" stuck "$transcript"; then
+            log "[$id] Session $session is no longer stopped on the limit; nothing to do"
+            rm -f "$file"
+            continue
+        fi
+
+        if (( due > now )); then
+            arm_resume "$id" "$due"
+            continue
+        fi
+
+        if (( attempts >= 2 )); then
+            log "[$id] Session $session is still stopped after $attempts tries; giving up"
+            notify "resume-failed" \
+                "$(provider_call "$id" label) did not continue the session in tmux pane $pane after its usage limit reset, and neither did Claude Plus. It is waiting for you." || true
+            rm -f "$file"
+            continue
+        fi
+
+        # Same pane id is not proof enough: a restarted tmux server hands the
+        # ids out again, and a new agent started from the same shell keeps the
+        # shell's pid but not the foreground process or its start time
+        current="$(tmux -S "$socket" display-message -p -t "$pane" '#{pane_pid}' 2>/dev/null)"
+        if [[ -z "$current" || "$current" != "$pane_pid" ]] ||
+           [[ "$(foreground_pgid "$current")" != "$fg" ]] ||
+           [[ "$(process_start "$fg")" != "$fg_start" ]]; then
+            log "[$id] Pane $pane no longer runs session $session; not typing into it"
+            rm -f "$file"
+            continue
+        fi
+
+        # Count the attempt before sending: one that cannot be counted is not
+        # sent, or nothing would stop it being sent on every run
+        if ! jq --argjson a "$((attempts + 1))" --argjson due "$((now + RESUME_VERIFY))" \
+                '.attempts = $a | .due = $due' "$file" > "$file.tmp.$$" ||
+           ! mv "$file.tmp.$$" "$file"; then
+            rm -f "$file.tmp.$$"
+            log "[$id] Could not record the resume attempt; not sending session=$session"
+            continue
+        fi
+
+        if tmux -S "$socket" send-keys -t "$pane" -l continue 2>/dev/null &&
+           tmux -S "$socket" send-keys -t "$pane" Enter 2>/dev/null; then
+            log "[$id] Typed continue into pane $pane session=$session attempt=$((attempts + 1))"
+        else
+            log "[$id] Could not type into pane $pane session=$session"
+        fi
+
+        # Look again shortly, to see whether it took
+        arm_resume "$id" "$((now + RESUME_VERIFY))"
+    done
+    shopt -u nullglob
+}
+
 # ------------------------------------------------------------------- status
 
 show_status() {
@@ -1201,6 +1398,9 @@ show_status() {
         fi
 
         echo "  Warmup model  : $(warmup_model "$id" | sed 's/^$/(agent default)/')"
+        if provider_can "$id" resume; then
+            echo "  Resume        : $(find "$dir/pending" -name '*.json' 2>/dev/null | wc -l) session(s) stopped on a limit"
+        fi
         echo "  Failures      : ${failures:-0}   auth: $([[ -f "$dir/auth_required" ]] && echo 'RELOGIN MAY BE REQUIRED' || echo OK)"
 
         if [[ "$last_run" =~ ^[0-9]+$ ]]; then
@@ -1328,6 +1528,12 @@ case "${1:-}" in
     scheduled)
         scheduled "${2:-$(default_provider)}"
         ;;
+    rate-limit)
+        rate_limit "${2:-$(default_provider)}"
+        ;;
+    resume)
+        resume "${2:-$(default_provider)}"
+        ;;
     reschedule)
         reschedule
         ;;
@@ -1353,7 +1559,7 @@ case "${1:-}" in
         echo "$VERSION"
         ;;
     *)
-        echo "Usage: $0 {statusline|observe|warmup|scheduled} [provider]" >&2
+        echo "Usage: $0 {statusline|observe|warmup|scheduled|rate-limit|resume} [provider]" >&2
         echo "       $0 {reschedule|scheduler-check|status|providers|notify-test|version}" >&2
         echo "       $0 anchor [HH:MM|off]" >&2
         echo "       $0 model [agent [name|auto|default]]" >&2
@@ -1380,7 +1586,18 @@ claude_available() {
 }
 
 claude_capabilities() {
-    printf 'keep alert\n'
+    printf 'keep alert resume\n'
+}
+
+# Is the session in transcript $1 still stopped on a usage limit? Its last
+# turn is the limit error, and nobody has cancelled the automatic continue
+# since: Claude Code writes "Automatic continue cancelled" when Esc is pressed.
+claude_stuck() {
+    tac "$1" 2>/dev/null |
+        jq -rR 'fromjson? | select(.type == "user" or .type == "assistant"
+                   or (.type == "system" and ((.content // "") | tostring | test("Automatic continue cancelled"))))
+               | if .type == "assistant" and .error == "rate_limit" then "stuck" else "moving" end' 2>/dev/null |
+        head -1 | grep -qx stuck
 }
 
 # The status line payload, as Claude Code writes it
@@ -1545,6 +1762,24 @@ for _id in $(wrapped_agents); do
     mv "$TMP_SETTINGS" "$_file"
 done
 unset _id _file
+
+# Claude Code reports a turn that stopped on a usage limit, which is what the
+# resume backstop needs. Added whether or not its status line is ours.
+if command -v claude >/dev/null 2>&1; then
+    _file="$(agent_settings claude)"
+    TMP_SETTINGS="$(mktemp)"
+
+    jq --arg cmd "$BIN rate-limit claude" '
+        .hooks.StopFailure = (
+            (.hooks.StopFailure // [])
+            + [{"matcher": "rate_limit", "hooks": [{"type": "command", "command": $cmd}]}]
+        )
+    ' "$_file" > "$TMP_SETTINGS"
+
+    jq empty "$TMP_SETTINGS"
+    mv "$TMP_SETTINGS" "$_file"
+    unset _file
+fi
 
 # Removal dropped the old at job; put the run the previous version had
 # planned back on the new one

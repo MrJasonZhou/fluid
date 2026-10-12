@@ -7,7 +7,7 @@ Deux choses que votre agent de code ne fait pas pour vous, prises en charge pend
 - **Fenêtre toujours ouverte** — une nouvelle fenêtre d'usage s'ouvre dès que la précédente est réinitialisée, même si personne ne travaille : à votre retour, un quota plein est déjà en cours.
 - **Alerte** — quand cela ne fonctionne plus, il vous prévient : Bark, ntfy, e-mail, ou tout autre canal que vous voudrez brancher.
 
-Reprendre une session après une limite d'usage, les agents le font désormais eux-mêmes ; Claude Plus le leur laisse.
+Reprendre une session après une limite d'usage, les agents le font désormais eux-mêmes ; quand cela n'arrive pas, Claude Plus le fait à leur place (voir Reprise plus bas).
 
 ## Agents
 
@@ -15,7 +15,7 @@ Claude Code, Codex et Antigravity comptabilisent un abonnement de la même faço
 
 | Agent | D'où viennent ses limites | Modifications de sa configuration |
 |---|---|---|
-| Claude Code | sa status line, à chaque rafraîchissement | une entrée de status line |
+| Claude Code | sa status line, à chaque rafraîchissement | une entrée de status line, un hook |
 | Codex | ses journaux de session, lus au besoin | aucune |
 | Antigravity | sa status line, à chaque rafraîchissement | une entrée de status line |
 
@@ -31,7 +31,7 @@ Chaque agent a sa propre fenêtre, sa propre planification et ses propres alerte
 
 ## Prérequis
 
-Linux, avec `jq`, `at` (avec `atd` démarré), `flock`, `timeout`, GNU `date`, et au moins l'un de `claude`, `codex` ou `agy`.
+Linux, avec `jq`, `at` (avec `atd` démarré), `flock`, `timeout`, GNU `date`, et au moins l'un de `claude`, `codex` ou `agy`. La Reprise nécessite `tmux`.
 
 ```bash
 sudo systemctl enable --now atd
@@ -51,7 +51,7 @@ cd claude-plus
 bash install-claude-plus.sh
 ```
 
-Pour chaque agent doté d'une status line, l'installateur enveloppe celle que vous aviez déjà, qui s'affiche exactement comme avant ; c'est la seule modification apportée aux réglages de cet agent, et chaque fichier de réglages est sauvegardé au préalable. Codex ne demande aucune configuration. Relancer l'installateur revient à une mise à jour propre plutôt qu'à une seconde installation, et conserve pour chaque agent sa prochaine exécution planifiée, son état et votre notificateur.
+Pour chaque agent doté d'une status line, l'installateur enveloppe celle que vous aviez déjà, qui s'affiche exactement comme avant ; c'est, avec un hook pour Claude Code (voir Reprise), la seule modification apportée aux réglages de cet agent, et chaque fichier de réglages est sauvegardé au préalable. Codex ne demande aucune configuration. Relancer l'installateur revient à une mise à jour propre plutôt qu'à une seconde installation, et conserve pour chaque agent sa prochaine exécution planifiée, son état et votre notificateur.
 
 ## Utilisation
 
@@ -85,9 +85,15 @@ Ouvrir une fenêtre coûte une requête : Claude Plus la réduit donc au minimum
 ~/.claude/claude-plus/claude-plus.sh model claude auto     # revenir au moins cher
 ```
 
+## Reprise
+
+Claude Code reprend une session de lui-même quand une limite d'usage se réinitialise (« Continue automatically at usage limit » dans `/config`). Parfois il ne le fait pas — une touche pressée par mégarde a annulé le compte à rebours, ou celui-ci n'a jamais démarré — et la session reste en plan jusqu'à ce que vous le remarquiez. Claude Plus sert de filet : il note chaque session arrêtée sur une limite, et la regarde de nouveau trois minutes après la réinitialisation. Si elle est toujours arrêtée, il tape `continue` dans son pane tmux.
+
+Le reste du temps, il ne se mêle de rien. Rien n'est tapé si Claude Code ou vous avez déjà repris, si vous avez annulé le compte à rebours avec Échap, ou si le pane exécute désormais autre chose ; il essaie deux fois au plus, puis vous prévient. Une session hors de tmux n'offre nulle part où taper ; elle est seulement journalisée.
+
 ## Alertes
 
-Claude Plus reste silencieux tant que rien ne requiert votre attention, et ne signale que cinq choses :
+Claude Plus reste silencieux tant que rien ne requiert votre attention, et ne signale que six choses :
 
 | | |
 |---|---|
@@ -96,8 +102,9 @@ Claude Plus reste silencieux tant que rien ne requiert votre attention, et ne si
 | **Planificateur arrêté** | Une exécution prévue a largement dépassé son heure : aucune fenêtre n'est maintenue ouverte ; en général `atd` ne tourne pas |
 | **Retour à la normale** | Il s'est remis de l'un des problèmes ci-dessus |
 | **Modèle de warm-up disparu** | Le modèle avec lequel un agent était réchauffé n'existe plus ; son propre modèle par défaut est utilisé désormais |
+| **Pas reprise** | Une session était toujours arrêtée après la réinitialisation de sa limite d'usage, et taper `continue` ne l'a pas relancée non plus |
 
-Chaque cas est signalé une seule fois par agent, pas à chaque nouvelle tentative : un problème nocturne vous coûte un unique message. Une panne qui se résout d'elle-même n'en coûte aucun : un agent déconnecté n'est signalé qu'après l'échec d'une tentative ultérieure. Les limites d'usage elles-mêmes ne sont jamais annoncées : elles sont courantes, et les agents reprennent ensuite d'eux-mêmes.
+Chaque cas est signalé une seule fois par agent, pas à chaque nouvelle tentative : un problème nocturne vous coûte un unique message. Une panne qui se résout d'elle-même n'en coûte aucun : un agent déconnecté n'est signalé qu'après l'échec d'une tentative ultérieure. Les limites d'usage elles-mêmes ne sont jamais annoncées : elles sont courantes, et les agents, ou Claude Plus derrière eux, reprennent ensuite.
 
 Pour choisir comment en être informé, copiez l'un des exemples et renseignez votre clé ou votre serveur :
 

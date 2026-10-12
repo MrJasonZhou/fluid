@@ -7,7 +7,7 @@ Duas coisas que o seu agente de código não faz por você, resolvidas enquanto 
 - **Janela sempre aberta** — uma nova janela de uso é aberta assim que a anterior é reiniciada, mesmo sem ninguém trabalhando, então quando você volta já há uma cota cheia em andamento.
 - **Aviso** — quando isso deixa de funcionar, ele avisa: Bark, ntfy, e-mail, ou qualquer outro canal que você queira ligar.
 
-Retomar uma sessão depois de um limite de uso é algo que os agentes agora fazem sozinhos, então o Claude Plus deixa isso com eles.
+Retomar uma sessão depois de um limite de uso é algo que os agentes agora fazem sozinhos; quando isso não acontece, o Claude Plus faz por eles (veja Retomada abaixo).
 
 ## Agentes
 
@@ -15,7 +15,7 @@ Claude Code, Codex e Antigravity medem uma assinatura do mesmo jeito: uma janela
 
 | Agente | De onde vêm os limites | Mudanças na configuração dele |
 |---|---|---|
-| Claude Code | a status line dele, a cada atualização | uma entrada de status line |
+| Claude Code | a status line dele, a cada atualização | uma entrada de status line, um hook |
 | Codex | os logs de sessão dele, lidos quando preciso | nenhuma |
 | Antigravity | a status line dele, a cada atualização | uma entrada de status line |
 
@@ -31,7 +31,7 @@ Cada agente tem a própria janela, o próprio agendamento e os próprios avisos;
 
 ## Requisitos
 
-Linux, com `jq`, `at` (com `atd` em execução), `flock`, `timeout`, GNU `date`, e pelo menos um entre `claude`, `codex` e `agy`.
+Linux, com `jq`, `at` (com `atd` em execução), `flock`, `timeout`, GNU `date`, e pelo menos um entre `claude`, `codex` e `agy`. A Retomada precisa de `tmux`.
 
 ```bash
 sudo systemctl enable --now atd
@@ -51,7 +51,7 @@ cd claude-plus
 bash install-claude-plus.sh
 ```
 
-Para cada agente que tem status line, o instalador envolve a que você já tinha, que continua aparecendo exatamente como antes; é a única mudança nas configurações daquele agente, e todo arquivo de configuração é salvo antes. O Codex não precisa de configuração alguma. Rodar o instalador de novo é uma atualização limpa, não uma segunda cópia, e preserva para cada agente a próxima execução agendada, o estado dela e o seu notificador.
+Para cada agente que tem status line, o instalador envolve a que você já tinha, que continua aparecendo exatamente como antes; é, junto com um hook para o Claude Code (veja Retomada), a única mudança nas configurações daquele agente, e todo arquivo de configuração é salvo antes. O Codex não precisa de configuração alguma. Rodar o instalador de novo é uma atualização limpa, não uma segunda cópia, e preserva para cada agente a próxima execução agendada, o estado dela e o seu notificador.
 
 ## Uso
 
@@ -85,9 +85,15 @@ Abrir uma janela custa um pedido, então o Claude Plus o mantém o menor possív
 ~/.claude/claude-plus/claude-plus.sh model claude auto     # voltar ao mais barato
 ```
 
+## Retomada
+
+O Claude Code retoma uma sessão sozinho quando um limite de uso é zerado ("Continue automatically at usage limit" em `/config`). Às vezes isso não acontece — uma tecla apertada sem querer cancelou a contagem regressiva, ou ela nunca começou — e a sessão fica parada até você perceber. O Claude Plus é a rede de segurança: anota cada sessão que para num limite e, três minutos depois de zerar, olha de novo. Se ela ainda estiver parada, digita `continue` no pane tmux dela.
+
+Fora isso, não se mete. Nada é digitado se o Claude Code ou você já continuaram, se você cancelou a contagem com Esc, ou se o pane agora roda outra coisa; tenta no máximo duas vezes e depois avisa você. Uma sessão fora do tmux não tem onde receber texto, então só fica registrada no log.
+
 ## Avisos
 
-O Claude Plus fica quieto enquanto nada precisa de você, e informa cinco coisas:
+O Claude Plus fica quieto enquanto nada precisa de você, e informa seis coisas:
 
 | | |
 |---|---|
@@ -96,8 +102,9 @@ O Claude Plus fica quieto enquanto nada precisa de você, e informa cinco coisas
 | **Agendador parado** | Uma execução agendada está muito atrasada, então nenhuma janela está sendo mantida aberta; geralmente o `atd` não está rodando |
 | **De volta ao normal** | Ele se recuperou de qualquer um dos problemas acima |
 | **Modelo de warm-up sumiu** | O modelo com que um agente era aquecido não existe mais, então a partir de agora usa-se o padrão dele |
+| **Não retomada** | Uma sessão continuava parada depois que o limite de uso zerou, e digitar `continue` também não a fez andar |
 
-Cada um é anunciado uma única vez por agente, não a cada nova tentativa: um problema durante a noite custa uma só mensagem. Uma falha que se resolve sozinha não custa nenhuma: que um agente está desconectado só é avisado depois que uma tentativa posterior também falha. Os limites de uso em si nunca são anunciados: são rotina, e os agentes retomam sozinhos depois deles.
+Cada um é anunciado uma única vez por agente, não a cada nova tentativa: um problema durante a noite custa uma só mensagem. Uma falha que se resolve sozinha não custa nenhuma: que um agente está desconectado só é avisado depois que uma tentativa posterior também falha. Os limites de uso em si nunca são anunciados: são rotina, e os agentes, ou o Claude Plus por trás deles, retomam depois deles.
 
 Para escolher como receber o aviso, copie um dos exemplos e preencha sua chave ou servidor:
 

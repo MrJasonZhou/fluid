@@ -4,7 +4,8 @@ Analysis of 2.3.1, 2026-09-17, revised since. The scheduler check listed here
 went into 2.4.0, 3.0.0 removed Resume (see Decided against), 3.1.0 added an
 anchor time after all, 4.0.0 split out the provider layer and added Codex and
 Antigravity, 4.1.0 made the warmup model replaceable, and 4.1.1 stopped a
-refresh that fixes itself from being reported as a signed-out agent; nothing
+refresh that fixes itself from being reported as a signed-out agent, and 4.2.0
+brought Resume back as a backstop behind the agent's own continue; nothing
 else has been started. Code is referred to by
 function name rather than line number, since lines move.
 
@@ -44,7 +45,7 @@ generated script would close this.
 
 ### Decided against
 
-- **Resume, removed in 3.0.0.** Claude Code resumes a session by itself when a
+- **Resume, removed in 3.0.0; back in 4.2.0 as a backstop.** Claude Code resumes a session by itself when a
   usage limit resets: the CLI's `/config` has "Continue automatically at usage
   limit" (`autoContinueAtUsageLimit`, on by default), and Desktop has an
   "Auto-continue when limits reset" checkbox. It runs inside the session, needs
@@ -61,6 +62,13 @@ generated script would close this.
   either reachable through `/rate-limit-options`, a single keypress, or a
   choice the user made. Not worth tmux, three hooks and the process-identity
   checks that came with it.
+  It came back after 2026-10-12, when a session in tmux with the setting on
+  sat idle for hours past its reset: no continue and no "cancelled" notice in
+  the transcript. 4.2.0 answers both objections above: it waits
+  `RESUME_GRACE` (180 s) past the reset so the native feature goes first, and
+  reads the transcript instead of keeping state from UserPromptSubmit and
+  SessionEnd hooks, so a session that has moved on or was cancelled with Esc
+  is left alone. One `StopFailure` hook is all it adds.
 - **Anchoring Keep to a time of day: reconsidered, shipped in 3.1.0.** The
   argument below still holds - whatever the phase, Keep is never worse than
   none - so this was left out at first. It went in anyway because a window

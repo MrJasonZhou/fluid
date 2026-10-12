@@ -7,7 +7,7 @@ Two things your coding agent does not do for you, handled while you are away fro
 - **Keep the window open** — a new usage window is opened as soon as the last one resets, even while nobody is working, so a full quota is already under way when you come back.
 - **Alert** — when that stops working, it tells you: Bark, ntfy, email, or anything else you care to wire up.
 
-Picking a session back up after a usage limit is something the agents now do themselves, so Claude Plus leaves that to them.
+Picking a session back up after a usage limit is something the agents now do themselves; when that does not happen, Claude Plus does it for them (see Resume below).
 
 ## Agents
 
@@ -15,7 +15,7 @@ Claude Code, Codex and Antigravity all meter a subscription the same way: a shor
 
 | Agent | Where its limits come from | Changes to its config |
 |---|---|---|
-| Claude Code | its status line, on every refresh | one status line entry |
+| Claude Code | its status line, on every refresh | one status line entry, one hook |
 | Codex | its session logs, read when needed | none |
 | Antigravity | its status line, on every refresh | one status line entry |
 
@@ -31,7 +31,7 @@ Each agent gets its own window, schedule and alerts; nothing is shared between t
 
 ## Requirements
 
-Linux, with `jq`, `at` (with `atd` running), `flock`, `timeout`, GNU `date`, and at least one of `claude`, `codex` or `agy`.
+Linux, with `jq`, `at` (with `atd` running), `flock`, `timeout`, GNU `date`, and at least one of `claude`, `codex` or `agy`. `tmux` is needed for Resume.
 
 ```bash
 sudo systemctl enable --now atd
@@ -51,7 +51,7 @@ cd claude-plus
 bash install-claude-plus.sh
 ```
 
-For each agent that has a status line, the installer wraps the one you already had, which keeps showing exactly as before; that is the only change it makes to that agent's settings, and every settings file is backed up first. Codex needs no configuration at all. Re-running the installer is a clean upgrade rather than a second copy, and it carries over each agent's next scheduled run, its state and your notifier.
+For each agent that has a status line, the installer wraps the one you already had, which keeps showing exactly as before; that, plus one hook for Claude Code (see Resume), is all it changes in that agent's settings, and every settings file is backed up first. Codex needs no configuration at all. Re-running the installer is a clean upgrade rather than a second copy, and it carries over each agent's next scheduled run, its state and your notifier.
 
 ## Usage
 
@@ -85,9 +85,15 @@ Opening a window costs one request, so Claude Plus keeps it as small as it can: 
 ~/.claude/claude-plus/claude-plus.sh model claude auto     # back to the cheapest
 ```
 
+## Resume
+
+Claude Code picks a session back up by itself when a usage limit resets ("Continue automatically at usage limit" in `/config`). Sometimes it does not — a stray key cancelled the countdown, or it never started — and the session sits there until you notice. Claude Plus is the backstop: it notes each session that stops on a limit, and three minutes after the reset looks again. If the session is still stopped, it types `continue` into its tmux pane.
+
+Otherwise it stays out of the way. Nothing is typed if Claude Code or you have already continued, if you cancelled the countdown with Esc, or if the pane now runs something else; it tries twice at most, then tells you. A session outside tmux has nowhere to type into, so it is only logged.
+
 ## Alerts
 
-Claude Plus stays quiet unless something needs you, and tells you about five things:
+Claude Plus stays quiet unless something needs you, and tells you about six things:
 
 | | |
 |---|---|
@@ -96,8 +102,9 @@ Claude Plus stays quiet unless something needs you, and tells you about five thi
 | **Scheduler stopped** | A planned run is long overdue, so no window is being kept open; usually `atd` is not running |
 | **Back to normal** | It recovered from any of the problems above |
 | **Warm-up model gone** | The model an agent was warmed up with no longer exists, so its own default is used from now on |
+| **Not resumed** | A session was still stopped after its usage limit reset, and typing `continue` did not get it going either |
 
-Each one is announced once per agent, not on every retry, so a problem overnight costs you a single message. A failure that passes on its own costs nothing at all: a signed-out agent is reported only once a later retry has failed too. Usage limits themselves are never announced: they are routine, and the agents pick up after them on their own.
+Each one is announced once per agent, not on every retry, so a problem overnight costs you a single message. A failure that passes on its own costs nothing at all: a signed-out agent is reported only once a later retry has failed too. Usage limits themselves are never announced: they are routine, and the agents, or Claude Plus behind them, pick up after them.
 
 To choose how you hear about it, copy one of the samples and fill in your own key or server:
 

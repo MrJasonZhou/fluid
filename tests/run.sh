@@ -4,7 +4,7 @@
 #   bash tests/run.sh
 #
 # Everything runs inside a throwaway directory: its own HOME, and fake claude,
-# at, atq, atrm, systemctl and pgrep on PATH. The real at queue and
+# at, atq, atrm, systemctl, pgrep and tmux on PATH. The real at queue and
 # settings.json are never touched. Needs jq, flock and timeout, which Claude
 # Plus needs anyway.
 
@@ -159,6 +159,17 @@ cat > "$FAKES/pgrep" <<'EOF'
 [[ "$(cat "$CP_TEST/atd" 2>/dev/null)" == up ]]
 EOF
 
+# tmux: a pane whose first process is named by a file, and keys sent to it
+# collected in another
+cat > "$FAKES/tmux" <<'EOF'
+#!/usr/bin/env bash
+case "$*" in
+    *display-message*) [[ -s "$CP_TEST/tmux-pane-pid" ]] && cat "$CP_TEST/tmux-pane-pid" ;;
+    *send-keys*)       echo "${@: -1}" >> "$CP_TEST/tmux-keys" ;;
+    *)                 exit 1 ;;
+esac
+EOF
+
 chmod +x "$FAKES"/*
 
 # ---------------------------------------------------------------- helpers
@@ -254,7 +265,8 @@ install_cp >/dev/null
 check "wraps the status line"      '[[ $(jq -r .statusLine.command "$S") == "$CP statusline claude" ]]'
 check "saves the original"         '[[ $(cat "$ORIGFILE") == "$FAKES/cs" ]]'
 check "keeps statusLine siblings"  '[[ $(jq .statusLine.refreshInterval "$S") == 1 ]]'
-check "adds only the status line"  '[[ $(grep -o "$MARKER" "$S" | wc -l) == 1 ]] && ! jq -e ".hooks.StopFailure" "$S" >/dev/null'
+check "adds the status line and one hook" '[[ $(grep -o "$MARKER" "$S" | wc -l) == 2 && $(jq -r ".hooks.StopFailure[0].matcher" "$S") == rate_limit ]]'
+check "the hook names the agent"   '[[ $(jq -r ".hooks.StopFailure[0].hooks[0].command" "$S") == "$CP rate-limit claude" ]]'
 check "renders through wrapper"    '[[ $(render) == CS ]]'
 
 jq '.env = {"FOO":"1"} | .hooks.SessionEnd += [{"hooks":[{"type":"command","command":"/opt/save"}]}]' "$S" > "$S.t" && mv "$S.t" "$S"
@@ -274,7 +286,7 @@ echo "/usr/local/bin/nightly" > "$QUEUE/2"
 install_cp >/dev/null
 check "upgrade: original not doubled"  '[[ $(cat "$ORIGFILE") == "$FAKES/cs" ]]'
 check "upgrade: later edits survive"   '[[ $(jq -r .env.FOO "$S") == 1 ]]'
-check "upgrade: old resume hooks gone"  '[[ $(grep -o "$MARKER" "$S" | wc -l) == 1 && $(jq -c ".hooks | keys" "$S") == "[\"PreToolUse\",\"SessionEnd\",\"UserPromptSubmit\"]" ]]'
+check "upgrade: old resume hooks gone"  '[[ $(grep -o "$MARKER" "$S" | wc -l) == 2 && $(jq -c ".hooks | keys" "$S") == "[\"PreToolUse\",\"SessionEnd\",\"StopFailure\",\"UserPromptSubmit\"]" && $(jq ".hooks.StopFailure | length" "$S") == 1 ]]'
 check "upgrade: user hooks in those events kept" '[[ $(jq -r ".hooks.UserPromptSubmit[0].hooks[0].command, .hooks.SessionEnd[0].hooks[0].command" "$S" | tr "\n" " ") == "/opt/audit /opt/save " ]]'
 check "upgrade: old resume queue removed"  '[[ ! -e "$BASE/state/pending" && ! -e "$BASE/state/stale" ]]'
 check "upgrade: log kept"              'grep -q "an earlier line" "$BASE/claude-plus.log"'
@@ -846,6 +858,83 @@ cp_run model claude default >/dev/null
 install_cp >/dev/null
 check "upgrade keeps the choice"       '[[ $(cat "$BASE/state/claude/warmup_model") == "-" ]]'
 install_cp uninstall >/dev/null
+
+# ======================================================================
+section "a session still stopped after the reset is resumed in its pane"
+
+new_home resume
+with_cs
+make_notifier
+install_cp >/dev/null
+sleep 300 & PANE_A=$!
+sleep 300 & PANE_B=$!
+echo "$PANE_A" > "$CP_TEST/tmux-pane-pid"
+rm -f "$CP_TEST/tmux-keys"
+T="$H/transcript.jsonl"
+PENDING="$BASE/state/claude/pending/s1.json"
+printf '%s\n' '{"type":"user","message":{"content":"go"}}' \
+    '{"type":"assistant","error":"rate_limit","isApiErrorMessage":true}' \
+    '{"type":"system","subtype":"turn_duration"}' > "$T"
+echo "$(( $(date +%s) - 10 ))" > "$BASE/state/claude/resets_at"
+hit() {
+    printf '{"session_id":"s1","transcript_path":"%s"}' "$T" |
+        in_home env "$@" "$CP" rate-limit claude
+}
+due_now() {
+    jq '.due = 0' "$PENDING" > "$PENDING.t" && mv "$PENDING.t" "$PENDING"
+}
+keys() {
+    cat "$CP_TEST/tmux-keys" 2>/dev/null | tr '\n' ' '
+}
+
+hit -u TMUX -u TMUX_PANE
+check "outside tmux: nothing recorded"   '[[ ! -e "$PENDING" ]]'
+
+hit TMUX=/tmp/sock,1,0 TMUX_PANE=%3
+check "in tmux: the session is recorded" '[[ $(jq -r .pane "$PENDING") == %3 && $(jq -r .pane_pid "$PENDING") == "$PANE_A" ]]'
+check "after the reset and a grace"      '(( $(jq .due "$PENDING") >= $(date +%s) + 170 ))'
+check "a resume job is queued"           'grep -lq "resume claude" "$QUEUE"/*'
+check "status counts it"                 '[[ $(cp_run status) == *"Resume        : 1 session"* ]]'
+
+cp_run resume claude
+check "before it is due: leaves it"      '[[ -z $(keys) && -e "$PENDING" ]]'
+
+due_now
+cp_run resume claude
+check "due and still stopped: types continue" '[[ $(keys) == "continue Enter " ]]'
+check "and counts the attempt"           '[[ $(jq .attempts "$PENDING") == 1 ]]'
+
+hit TMUX=/tmp/sock,1,0 TMUX_PANE=%3
+check "hitting the limit again keeps the count" '[[ $(jq .attempts "$PENDING") == 1 ]]'
+
+echo '{"type":"user","message":{"content":"continue"}}' >> "$T"
+due_now
+cp_run resume claude
+check "continued: forgotten, nothing typed" '[[ $(keys) == "continue Enter " && ! -e "$PENDING" ]]'
+
+echo '{"type":"assistant","error":"rate_limit"}' >> "$T"
+hit TMUX=/tmp/sock,1,0 TMUX_PANE=%3
+echo '{"type":"system","subtype":"informational","content":"Automatic continue cancelled · /rate-limit-options to re-arm"}' >> "$T"
+due_now
+cp_run resume claude
+check "cancelled with Esc: left alone"   '[[ $(keys) == "continue Enter " && ! -e "$PENDING" ]]'
+
+echo '{"type":"assistant","error":"rate_limit"}' >> "$T"
+hit TMUX=/tmp/sock,1,0 TMUX_PANE=%3
+echo "$PANE_B" > "$CP_TEST/tmux-pane-pid"
+due_now
+cp_run resume claude
+check "pane runs something else: not typed into" '[[ $(keys) == "continue Enter " && ! -e "$PENDING" ]]'
+
+echo "$PANE_A" > "$CP_TEST/tmux-pane-pid"
+hit TMUX=/tmp/sock,1,0 TMUX_PANE=%3
+jq '.due = 0 | .attempts = 2' "$PENDING" > "$PENDING.t" && mv "$PENDING.t" "$PENDING"
+cp_run resume claude
+check "two tries: gives up and says so"  '[[ $(keys) == "continue Enter " && ! -e "$PENDING" && $(count resume-failed notify-delivered) == 1 ]]'
+
+kill "$PANE_A" "$PANE_B" 2>/dev/null
+install_cp uninstall >/dev/null
+check "uninstall takes the hook out"     '! grep -qF "$MARKER" "$S" && [[ $(our_jobs) == 0 ]]'
 
 # ======================================================================
 echo

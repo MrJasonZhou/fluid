@@ -255,7 +255,7 @@ render() {
 }
 
 our_jobs() {
-    grep -lF "$MARKER" "$QUEUE"/* 2>/dev/null | wc -l
+    echo $(( $(grep -lF "$MARKER" "$QUEUE"/* 2>/dev/null | wc -l) ))
 }
 
 make_notifier() {
@@ -298,7 +298,7 @@ install_cp >/dev/null
 check "wraps the status line"      '[[ $(jq -r .statusLine.command "$S") == "$CP statusline claude" ]]'
 check "saves the original"         '[[ $(cat "$ORIGFILE") == "$FAKES/cs" ]]'
 check "keeps statusLine siblings"  '[[ $(jq .statusLine.refreshInterval "$S") == 1 ]]'
-check "adds the status line and one hook" '[[ $(grep -o "$MARKER" "$S" | wc -l) == 2 && $(jq -r ".hooks.StopFailure[0].matcher" "$S") == rate_limit ]]'
+check "adds the status line and one hook" '[[ $(( $(grep -o "$MARKER" "$S" | wc -l) )) == 2 && $(jq -r ".hooks.StopFailure[0].matcher" "$S") == rate_limit ]]'
 check "the hook names the agent"   '[[ $(jq -r ".hooks.StopFailure[0].hooks[0].command" "$S") == "$CP rate-limit claude" ]]'
 check "renders through wrapper"    '[[ $(render) == CS ]]'
 
@@ -317,7 +317,7 @@ echo "/usr/local/bin/nightly" > "$QUEUE/2"
 install_cp >/dev/null
 check "upgrade: original not doubled"  '[[ $(cat "$ORIGFILE") == "$FAKES/cs" ]]'
 check "upgrade: later edits survive"   '[[ $(jq -r .env.FOO "$S") == 1 ]]'
-check "upgrade: stray hooks of ours gone"  '[[ $(grep -o "$MARKER" "$S" | wc -l) == 2 && $(jq -c ".hooks | keys" "$S") == "[\"PreToolUse\",\"SessionEnd\",\"StopFailure\",\"UserPromptSubmit\"]" && $(jq ".hooks.StopFailure | length" "$S") == 1 ]]'
+check "upgrade: stray hooks of ours gone"  '[[ $(( $(grep -o "$MARKER" "$S" | wc -l) )) == 2 && $(jq -c ".hooks | keys" "$S") == "[\"PreToolUse\",\"SessionEnd\",\"StopFailure\",\"UserPromptSubmit\"]" && $(jq ".hooks.StopFailure | length" "$S") == 1 ]]'
 check "upgrade: user hooks in those events kept" '[[ $(jq -r ".hooks.UserPromptSubmit[0].hooks[0].command, .hooks.SessionEnd[0].hooks[0].command" "$S" | tr "\n" " ") == "/opt/audit /opt/save " ]]'
 check "upgrade: log kept"              'grep -q "an earlier line" "$BASE/fluid.log"'
 check "upgrade: notifier survives"     '[[ -x "$BASE/notify.sh" ]]'
@@ -719,7 +719,7 @@ check "warmed up with its own command"  'grep -q -- "-p Reply only OK." "$CP_TES
 out="$(install_cp uninstall)"
 check "its status line restored"        '[[ $(jq -r .statusLine.command "$AGYS") == "$FAKES/cs" ]]'
 check "claude status line restored"     '[[ $(jq -r .statusLine.command "$S") == "$FAKES/cs" ]]'
-check "both settings backed up"         '[[ $(compgen -G "$AGYS.fluid-uninstall-backup.*" | wc -l) == 1 ]]'
+check "both settings backed up"         '[[ $(( $(compgen -G "$AGYS.fluid-uninstall-backup.*" | wc -l) )) == 1 ]]'
 
 # ======================================================================
 section "anchor arithmetic, on fixed dates"
@@ -998,7 +998,7 @@ mac() {
     in_home env -u FLUID_SCHEDULER "$@"
 }
 plists() {
-    ls "$AGENTS"/io.github.mrjasonzhou.fluid.*.plist 2>/dev/null | wc -l
+    echo $(( $(ls "$AGENTS"/io.github.mrjasonzhou.fluid.*.plist 2>/dev/null | wc -l) ))
 }
 reading() {
     printf '{"rate_limits":{"five_hour":{"used_percentage":10,"resets_at":%s}}}' "$1" |

@@ -798,6 +798,8 @@ take_lock() {
     local dir="$path.d" holder
     while ! mkdir "$dir" 2>/dev/null; do
         holder="$(cat "$dir/pid" 2>/dev/null)"
+        # Already ours: flock lets a process take its own lock again, so must this
+        [[ "$holder" == "$$" ]] && return 0
         if [[ -n "$holder" ]] && ! kill -0 "$holder" 2>/dev/null; then
             rm -rf "$dir"
             continue
@@ -1569,7 +1571,7 @@ show_status() {
 
         echo "  Warmup model  : $(warmup_model "$id" | sed 's/^$/(agent default)/')"
         if provider_can "$id" resume; then
-            echo "  Resume        : $(find "$dir/pending" -name '*.json' 2>/dev/null | wc -l) session(s) stopped on a limit"
+            echo "  Resume        : $(( $(find "$dir/pending" -name '*.json' 2>/dev/null | wc -l) )) session(s) stopped on a limit"
         fi
         echo "  Failures      : ${failures:-0}   auth: $([[ -f "$dir/auth_required" ]] && echo 'RELOGIN MAY BE REQUIRED' || echo OK)"
 

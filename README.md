@@ -31,7 +31,7 @@ Each agent gets its own window, schedule and alerts; nothing is shared between t
 
 ## Requirements
 
-Linux, with `jq`, `at` (with `atd` running), `flock`, `timeout`, GNU `date`, and at least one of `claude`, `codex` or `agy`. `tmux` is needed for Resume.
+Linux, with `jq`, `at` (with `atd` running), `flock`, `timeout`, GNU `date`, and at least one of `claude`, `codex` or `agy`. `tmux` is needed for Resume. On Windows, run Claude Code inside WSL with systemd enabled, so that atd can start. macOS is not supported yet.
 
 ```bash
 sudo systemctl enable --now atd

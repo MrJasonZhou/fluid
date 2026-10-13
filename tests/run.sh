@@ -170,6 +170,13 @@ case "$*" in
 esac
 EOF
 
+# uname: the kernel name a test picks, the real answer otherwise
+cat > "$FAKES/uname" <<'EOF'
+#!/usr/bin/env bash
+if [[ "$*" == -s && -s "$CP_TEST/uname" ]]; then cat "$CP_TEST/uname"; exit; fi
+exec /usr/bin/uname "$@"
+EOF
+
 chmod +x "$FAKES"/*
 
 # ---------------------------------------------------------------- helpers
@@ -937,6 +944,22 @@ in_home "$ROOT/scripts/entry.sh" anchor 07:30 >/dev/null
 check "anchor takes a time"              '[[ $(cat "$BASE/anchor") == 07:30 ]]'
 check "the plugin hook records the session" '[[ $(jq -r .pane "$BASE/state/claude/pending/p1.json") == %7 ]]'
 install_cp uninstall >/dev/null
+
+# ======================================================================
+section "unsupported systems are told so before anything changes"
+
+for k in Darwin MINGW64_NT-10.0 FreeBSD; do
+    new_home "os-$k"
+    with_cs
+    echo "$k" > "$CP_TEST/uname"
+    out="$(install_cp 2>&1)"; rc=$?
+    check "$k: refused"        '[[ $rc == 1 && ! -e "$BASE" && $(jq -r .statusLine.command "$S") == "$FAKES/cs" ]]'
+    case "$k" in
+        Darwin) check "$k: says macOS"  '[[ $out == *"macOS"* ]]' ;;
+        MINGW*) check "$k: points to WSL" '[[ $out == *"WSL"* ]]' ;;
+    esac
+done
+rm -f "$CP_TEST/uname"
 
 # ======================================================================
 echo

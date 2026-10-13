@@ -31,7 +31,7 @@ Claude Code、Codex 和 Antigravity 的計量方式是一樣的：一個從你�
 
 ## 相依套件
 
-Linux，並需要 `jq`、`at`（需執行 `atd`）、`flock`、`timeout`、GNU `date`，以及 `claude`、`codex`、`agy` 中至少一個。「續跑」需要 `tmux`。
+Linux，並需要 `jq`、`at`（需執行 `atd`）、`flock`、`timeout`、GNU `date`，以及 `claude`、`codex`、`agy` 中至少一個。「續跑」需要 `tmux`。Windows 上請在啟用了 systemd 的 WSL 裡執行 Claude Code，這樣 atd 才能啟動。暫不支援 macOS。
 
 ```bash
 sudo systemctl enable --now atd

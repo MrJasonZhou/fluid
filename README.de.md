@@ -31,7 +31,7 @@ Jeder Agent bekommt sein eigenes Fenster, seinen eigenen Zeitplan und seine eige
 
 ## Voraussetzungen
 
-Linux mit `jq`, `at` (mit laufendem `atd`), `flock`, `timeout`, GNU `date` und mindestens einem von `claude`, `codex` oder `agy`. Für Fortsetzen wird `tmux` gebraucht.
+Linux mit `jq`, `at` (mit laufendem `atd`), `flock`, `timeout`, GNU `date` und mindestens einem von `claude`, `codex` oder `agy`. Für Fortsetzen wird `tmux` gebraucht. Unter Windows läuft Claude Code in WSL mit aktiviertem systemd, damit atd starten kann. macOS wird noch nicht unterstützt.
 
 ```bash
 sudo systemctl enable --now atd

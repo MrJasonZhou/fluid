@@ -38,6 +38,13 @@ generated script would close this.
 
 ### Low priority
 
+- macOS (planned for 0.2.0): `at` is there but atd is off by default, and
+  `flock`, GNU `date`, `timeout` and `/proc` are missing. launchd one-shot
+  jobs, an `mkdir` lock, a date helper that speaks BSD too, and `ps -o
+  lstart` would cover it, with a macOS runner in CI. Native Windows is out of
+  reach for Resume (no way to type into a terminal pane) and would need
+  `schtasks`; WSL works as Linux.
+
 - No way to turn one agent off without uninstalling. Deleting its file under
   `providers/` works until the next upgrade rewrites it.
 - Kimi Code and Grok Build are understood but not implemented: Kimi's short

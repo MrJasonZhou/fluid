@@ -31,7 +31,7 @@ Claude Code、Codex、Antigravity はどれも同じ形で計量します。最�
 
 ## 必要なもの
 
-Linux 上で、`jq`、`at`（`atd` 起動済み）、`flock`、`timeout`、GNU `date`、そして `claude`、`codex`、`agy` のうち少なくとも 1 つ。「再開」には `tmux` が必要です。
+Linux 上で、`jq`、`at`（`atd` 起動済み）、`flock`、`timeout`、GNU `date`、そして `claude`、`codex`、`agy` のうち少なくとも 1 つ。「再開」には `tmux` が必要です。Windows では、systemd を有効にした WSL の中で Claude Code を動かしてください（atd を起動するため）。macOS はまだ対応していません。
 
 ```bash
 sudo systemctl enable --now atd

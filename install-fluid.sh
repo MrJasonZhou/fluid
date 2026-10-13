@@ -414,6 +414,25 @@ if [[ "$ACTION" == "uninstall" ]]; then
     exit 0
 fi
 
+# Linux only for now, WSL included. Say so plainly rather than stopping on
+# the first missing command.
+case "$(uname -s)" in
+    Linux)
+        ;;
+    Darwin)
+        echo "Fluid does not support macOS yet; it needs at, flock and GNU date. Linux and WSL work today." >&2
+        exit 1
+        ;;
+    MINGW*|MSYS*|CYGWIN*)
+        echo "Fluid does not run on Windows itself. Run Claude Code inside WSL, with systemd enabled so atd can start, and install Fluid there." >&2
+        exit 1
+        ;;
+    *)
+        echo "Fluid supports Linux (and WSL) only; this is $(uname -s)." >&2
+        exit 1
+        ;;
+esac
+
 require at atq atrm flock date timeout
 
 if [[ -z "$(wrapped_agents)" ]] && ! command -v codex >/dev/null 2>&1; then

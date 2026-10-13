@@ -1,8 +1,8 @@
 ---
 description: Install or upgrade Claude Plus (wraps the status line, schedules windows, sets up resume)
-allowed-tools: ["Bash(${CLAUDE_PLUGIN_ROOT}/scripts/tailwind.sh:*)"]
+allowed-tools: ["Bash(${CLAUDE_PLUGIN_ROOT}/scripts/fluid.sh:*)"]
 ---
 
-!`"${CLAUDE_PLUGIN_ROOT}/scripts/tailwind.sh" install 2>&1`
+!`"${CLAUDE_PLUGIN_ROOT}/scripts/fluid.sh" install 2>&1`
 
 Present the installer output briefly. It edited `~/.claude/settings.json` only to wrap the status line (a backup sits next to it); the resume hook comes with this plugin. If it warns that atd is not running, tell the user to run `sudo systemctl enable --now atd`. For alerts, point them at the samples in `~/.claude/claude-plus/notify/`. Do not run anything else.

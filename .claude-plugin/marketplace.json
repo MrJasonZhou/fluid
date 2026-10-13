@@ -5,13 +5,13 @@
   },
   "metadata": {
     "description": "Claude Plus as a Claude Code plugin.",
-    "version": "4.3.1"
+    "version": "4.3.2"
   },
   "plugins": [
     {
-      "name": "tailwind",
+      "name": "fluid",
       "description": "Keeps Claude Code's usage window open while you are away, resumes a session its own auto-continue missed, and alerts you when either stops working.",
-      "version": "4.3.1",
+      "version": "4.3.2",
       "author": {
         "name": "Jason Zhou"
       },

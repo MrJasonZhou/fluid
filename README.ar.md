@@ -54,11 +54,11 @@ bash install-claude-plus.sh
 أو كإضافة (plugin) لـ Claude Code، ثم تشغّل مثبِّتها من داخل Claude Code نفسه:
 
 ```
-/plugin install tailwind --marketplace MrJasonZhou/claude-plus
-/tailwind:install
+/plugin install fluid --marketplace MrJasonZhou/claude-plus
+/fluid:install
 ```
 
-اسم الإضافة `tailwind`، لأن أسماء الإضافات لا يجوز أن تبدأ بـ `claude-`. وهي تحمل خطّاف الاستئناف بنفسها، فلا يضيفه المثبِّت إلى إعداداتك، كما تضيف `/tailwind:status` و`/tailwind:anchor` و`/tailwind:uninstall`.
+اسم الإضافة `fluid`، لأن أسماء الإضافات لا يجوز أن تبدأ بـ `claude-`. وهي تحمل خطّاف الاستئناف بنفسها، فلا يضيفه المثبِّت إلى إعداداتك، كما تضيف `/fluid:status` و`/fluid:anchor` و`/fluid:uninstall`.
 
 لكل وكيل لديه شريط حالة، يغلّف المثبِّت الشريط الموجود لديك أصلًا، فيبقى ظاهرًا كما كان تمامًا؛ وهذا، مع خطّاف واحد لـ Claude Code (انظر «الاستئناف»)، هو كل ما يتغيّر في إعدادات ذلك الوكيل، ويُحفظ كل ملف إعدادات احتياطيًا قبل ذلك. أما Codex فلا يحتاج أي إعداد. وإعادة تشغيل المثبِّت ترقية نظيفة لا نسخة ثانية، وتحتفظ لكل وكيل بتشغيله المجدول التالي وحالته، وبأداة التنبيه الخاصة بك.
 

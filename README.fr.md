@@ -54,11 +54,11 @@ bash install-claude-plus.sh
 Ou en plugin Claude Code, dont vous lancez ensuite l'installateur depuis Claude Code :
 
 ```
-/plugin install tailwind --marketplace MrJasonZhou/claude-plus
-/tailwind:install
+/plugin install fluid --marketplace MrJasonZhou/claude-plus
+/fluid:install
 ```
 
-Le plugin s'appelle `tailwind`, car un nom de plugin ne peut pas commencer par `claude-`. Il apporte lui-même le hook de la Reprise, si bien que l'installateur ne l'ajoute pas à vos réglages, et ajoute `/tailwind:status`, `/tailwind:anchor` et `/tailwind:uninstall`.
+Le plugin s'appelle `fluid`, car un nom de plugin ne peut pas commencer par `claude-`. Il apporte lui-même le hook de la Reprise, si bien que l'installateur ne l'ajoute pas à vos réglages, et ajoute `/fluid:status`, `/fluid:anchor` et `/fluid:uninstall`.
 
 Pour chaque agent doté d'une status line, l'installateur enveloppe celle que vous aviez déjà, qui s'affiche exactement comme avant ; c'est, avec un hook pour Claude Code (voir Reprise), la seule modification apportée aux réglages de cet agent, et chaque fichier de réglages est sauvegardé au préalable. Codex ne demande aucune configuration. Relancer l'installateur revient à une mise à jour propre plutôt qu'à une seconde installation, et conserve pour chaque agent sa prochaine exécution planifiée, son état et votre notificateur.
 

@@ -6,7 +6,8 @@ anchor time after all, 4.0.0 split out the provider layer and added Codex and
 Antigravity, 4.1.0 made the warmup model replaceable, and 4.1.1 stopped a
 refresh that fixes itself from being reported as a signed-out agent, 4.2.0
 brought Resume back as a backstop behind the agent's own continue, and 4.3.0
-packaged it as a Claude Code plugin named `tailwind`; nothing else has been
+packaged it as a Claude Code plugin named `fluid` (`tailwind` before 4.3.2,
+which came too close to other listings); nothing else has been
 started. Code is referred to by
 function name rather than line number, since lines move.
 

@@ -54,11 +54,11 @@ bash install-claude-plus.sh
 也可以作为 Claude Code 插件安装，然后在 Claude Code 里运行它的安装程序：
 
 ```
-/plugin install tailwind --marketplace MrJasonZhou/claude-plus
-/tailwind:install
+/plugin install fluid --marketplace MrJasonZhou/claude-plus
+/fluid:install
 ```
 
-插件叫 `tailwind`，因为插件名不能以 `claude-` 开头。“续跑”用的 hook 由插件自带，所以安装脚本不会再把它写进你的配置；另外还有 `/tailwind:status`、`/tailwind:anchor` 和 `/tailwind:uninstall`。
+插件叫 `fluid`，因为插件名不能以 `claude-` 开头。“续跑”用的 hook 由插件自带，所以安装脚本不会再把它写进你的配置；另外还有 `/fluid:status`、`/fluid:anchor` 和 `/fluid:uninstall`。
 
 对每个带 status line 的助手，安装脚本会包装你现有的那条（显示和原来完全一样），这是它对该助手配置做的唯一改动（Claude Code 另外多一个 hook，见“续跑”），而且每个配置文件都会先备份。Codex 完全不需要配置。重复执行安装脚本是一次干净的升级，而不是装第二份，并且会保留每个助手下一次排好的任务、它的状态，以及你的通知脚本。
 

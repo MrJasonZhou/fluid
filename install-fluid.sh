@@ -49,6 +49,19 @@ Usage: $(basename "$0") [install|uninstall]
 USAGE
 }
 
+# timeout is GNU; macOS may have it as gtimeout, or not at all
+with_timeout() {
+    local secs="$1"
+    shift
+    if command -v timeout >/dev/null 2>&1; then
+        timeout "$secs" "$@"
+    elif command -v gtimeout >/dev/null 2>&1; then
+        gtimeout "$secs" "$@"
+    else
+        perl -e 'alarm shift; exec @ARGV or exit 127' "$secs" "$@"
+    fi
+}
+
 require() {
     local cmd
 
@@ -236,7 +249,7 @@ chain_calls_us() {
     cp -p "$BIN" "$PROBE_SAVED"
 
     write_probe
-    printf '%s' "$PROBE_INPUT" | timeout 10 bash -c "$cmd" >/dev/null 2>&1 || true
+    printf '%s' "$PROBE_INPUT" | with_timeout 10 bash -c "$cmd" >/dev/null 2>&1 || true
 
     if [[ -e "$PROBE_DIR/called" ]]; then
         rc=0
@@ -295,6 +308,14 @@ remove_installation() {
             fi
         done < <(atq 2>/dev/null || true)
     fi
+
+    # The one-shot launchd agents queued on macOS
+    local plist
+    for plist in "$HOME/Library/LaunchAgents/io.github.mrjasonzhou.fluid."*.plist; do
+        [[ -e "$plist" ]] || continue
+        launchctl remove "$(basename "$plist" .plist)" >/dev/null 2>&1 || true
+        rm -f "$plist"
+    done
 
     if (( ${#keep[@]} == 0 )); then
         rm -rf "$BASE"
@@ -414,26 +435,24 @@ if [[ "$ACTION" == "uninstall" ]]; then
     exit 0
 fi
 
-# Linux only for now, WSL included. Say so plainly rather than stopping on
-# the first missing command.
+# Linux (WSL included) and macOS. Say so plainly rather than stopping on the
+# first missing command.
 case "$(uname -s)" in
     Linux)
+        require at atq atrm
         ;;
     Darwin)
-        echo "Fluid does not support macOS yet; it needs at, flock and GNU date. Linux and WSL work today." >&2
-        exit 1
+        require launchctl
         ;;
     MINGW*|MSYS*|CYGWIN*)
         echo "Fluid does not run on Windows itself. Run Claude Code inside WSL, with systemd enabled so atd can start, and install Fluid there." >&2
         exit 1
         ;;
     *)
-        echo "Fluid supports Linux (and WSL) only; this is $(uname -s)." >&2
+        echo "Fluid supports Linux (and WSL) and macOS; this is $(uname -s)." >&2
         exit 1
         ;;
 esac
-
-require at atq atrm flock date timeout
 
 if [[ -z "$(wrapped_agents)" ]] && ! command -v codex >/dev/null 2>&1; then
     echo "None of the agents Fluid knows about are installed here." >&2
@@ -503,7 +522,7 @@ cat > "$BIN" <<'FLUID_SCRIPT'
 # option) any later version. See the LICENSE file for details.
 set -u
 
-VERSION="0.1.2"
+VERSION="0.2.0"
 
 BASE="$HOME/.fluid"
 STATE="$BASE/state"
@@ -657,7 +676,7 @@ notify() {
     [[ -x "$NOTIFY" ]] || return 1
 
     if CP_EVENT="$1" CP_MESSAGE="$2" CP_HOST="$(uname -n)" \
-        timeout 20 "$NOTIFY" >/dev/null 2>&1; then
+        with_timeout 20 "$NOTIFY" >/dev/null 2>&1; then
         return 0
     fi
 
@@ -702,16 +721,202 @@ notify_recovered() {
     return 0
 }
 
-# --------------------------------------------------------------- at jobs
+# ------------------------------------------------------------- portability
+#
+# Linux and macOS differ in the small tools: GNU date reads `-d @epoch`, BSD
+# date wants `-r epoch` and `-j -f` to parse; macOS has no flock, timeout, tac
+# or /proc, and its bash is 3.2. Everything below this section goes through
+# these helpers instead.
+
+if date -d @0 +%s >/dev/null 2>&1; then
+    GNU_DATE=1
+else
+    GNU_DATE=0
+fi
+
+# Format epoch second $1 with date format $2
+fmt_time() {
+    if (( GNU_DATE )); then
+        date -d "@$1" "$2"
+    else
+        date -r "$1" "$2"
+    fi
+}
+
+# The epoch second of a local "YYYY-MM-DD HH:MM"
+parse_time() {
+    if (( GNU_DATE )); then
+        date -d "$1" +%s
+    else
+        date -j -f '%Y-%m-%d %H:%M' "$1" +%s
+    fi
+}
+
+with_timeout() {
+    local secs="$1"
+    shift
+
+    if command -v timeout >/dev/null 2>&1; then
+        timeout "$secs" "$@"
+    elif command -v gtimeout >/dev/null 2>&1; then
+        gtimeout "$secs" "$@"
+    else
+        perl -e 'alarm shift; exec @ARGV or exit 127' "$secs" "$@"
+    fi
+}
+
+# Lines of file $1, last first: tac on Linux, tail -r on macOS
+reverse_lines() {
+    if command -v tac >/dev/null 2>&1; then
+        tac "$1"
+    elif tail -r /dev/null >/dev/null 2>&1; then
+        tail -r "$1"
+    else
+        awk '{ line[NR] = $0 } END { for (i = NR; i > 0; i--) print line[i] }' "$1"
+    fi
+}
+
+HELD_LOCKS=()
+
+# Take the lock at $2 on file descriptor $1; with $3 = try, give up at once
+# instead of waiting. Held until the process exits.
+take_lock() {
+    local fd="$1" path="$2" mode="${3:-wait}"
+
+    if command -v flock >/dev/null 2>&1; then
+        eval "exec $fd>\"\$path\""
+        if [[ "$mode" == try ]]; then
+            flock -n "$fd"
+        else
+            flock "$fd"
+        fi
+        return
+    fi
+
+    # ponytail: a directory as the lock, for systems without flock. A holder
+    # that died is spotted by its pid; contention here is a handful of runs.
+    local dir="$path.d" holder
+    while ! mkdir "$dir" 2>/dev/null; do
+        holder="$(cat "$dir/pid" 2>/dev/null)"
+        if [[ -n "$holder" ]] && ! kill -0 "$holder" 2>/dev/null; then
+            rm -rf "$dir"
+            continue
+        fi
+        [[ "$mode" == try ]] && return 1
+        sleep 0.2
+    done
+
+    echo "$$" > "$dir/pid"
+    HELD_LOCKS+=("$dir")
+    trap 'rm -rf ${HELD_LOCKS[@]+"${HELD_LOCKS[@]}"}' EXIT
+}
+
+# --------------------------------------------------------------- scheduling
+#
+# Runs are queued with `at` on Linux and as one-shot launchd agents on macOS.
+# FLUID_SCHEDULER overrides the choice, which is how the tests reach both.
+
+if [[ -n "${FLUID_SCHEDULER:-}" ]]; then
+    SCHEDULER="$FLUID_SCHEDULER"
+elif [[ "$(uname -s)" == Darwin ]]; then
+    SCHEDULER=launchd
+else
+    SCHEDULER=at
+fi
+
+LAUNCH_DIR="$HOME/Library/LaunchAgents"
+LAUNCH_PREFIX="io.github.mrjasonzhou.fluid"
+
+xml_escape() {
+    printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'
+}
+
+# Queue `fluid.sh $2 $3` for epoch second $1; prints the job id
+submit_job() {
+    local target="$1" sub="$2" id="$3"
+
+    if [[ "$SCHEDULER" == at ]]; then
+        local output
+        output="$(
+            printf '%q %q %q\n' "$SELF" "$sub" "$id" |
+                LC_ALL=C at -t "$(fmt_time "$target" '+%Y%m%d%H%M.%S')" 2>&1
+        )" || {
+            log "[$id] at refused the job: $output"
+            return 1
+        }
+        awk '/^job [0-9]+ / {print $2; exit}' <<< "$output"
+        return
+    fi
+
+    # launchd fires on whole minutes; round up so a run is never early
+    (( target % 60 == 0 )) || target=$(( (target / 60 + 1) * 60 ))
+
+    local job="$target-$$-$RANDOM" label plist month day hour minute arg args=""
+    label="$LAUNCH_PREFIX.$job"
+    plist="$LAUNCH_DIR/$label.plist"
+    read -r month day hour minute <<< "$(fmt_time "$target" '+%m %d %H %M')"
+
+    # The job deletes its own plist first, then runs, then unloads itself;
+    # StartCalendarInterval has no year, so it must never be left behind
+    for arg in /bin/bash -c 'rm -f -- "$1"; "$2" "$3" "$4"; launchctl remove "$5"' \
+               fluid-job "$plist" "$SELF" "$sub" "$id" "$label"; do
+        args="$args        <string>$(xml_escape "$arg")</string>"$'\n'
+    done
+
+    mkdir -p "$LAUNCH_DIR"
+    cat > "$plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>$label</string>
+    <key>ProgramArguments</key>
+    <array>
+$args    </array>
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Month</key><integer>$((10#$month))</integer>
+        <key>Day</key><integer>$((10#$day))</integer>
+        <key>Hour</key><integer>$((10#$hour))</integer>
+        <key>Minute</key><integer>$((10#$minute))</integer>
+    </dict>
+</dict>
+</plist>
+PLIST
+
+    if ! launchctl bootstrap "gui/$(id -u)" "$plist" >/dev/null 2>&1 &&
+       ! launchctl load "$plist" >/dev/null 2>&1; then
+        rm -f "$plist"
+        log "[$id] launchd refused the job $label"
+        return 1
+    fi
+
+    printf '%s\n' "$job"
+}
 
 job_exists() {
-    local job_id="${1:-}"
+    local job="${1:-}"
+    [[ -n "$job" ]] || return 1
 
-    [[ -n "$job_id" ]] || return 1
+    if [[ "$SCHEDULER" == at ]]; then
+        atq 2>/dev/null | awk '{print $1}' | grep -qx "$job"
+    else
+        [[ -f "$LAUNCH_DIR/$LAUNCH_PREFIX.$job.plist" ]]
+    fi
+}
 
-    atq 2>/dev/null |
-        awk '{print $1}' |
-        grep -qx "$job_id"
+remove_job() {
+    local job="${1:-}"
+    job_exists "$job" || return 0
+
+    if [[ "$SCHEDULER" == at ]]; then
+        atrm "$job" >/dev/null 2>&1
+    else
+        launchctl remove "$LAUNCH_PREFIX.$job" >/dev/null 2>&1
+        rm -f "$LAUNCH_DIR/$LAUNCH_PREFIX.$job.plist"
+    fi
+    return 0
 }
 
 # Schedule `scheduled <id>` at $2, replacing whatever this provider had
@@ -721,8 +926,7 @@ arm_job() {
     dir="$(pstate "$id")"
     mkdir -p "$dir"
 
-    exec 9>"$dir/schedule.lock"
-    flock 9
+    take_lock 9 "$dir/schedule.lock"
 
     local now old_job old_target
     now="$(date +%s)"
@@ -740,28 +944,13 @@ arm_job() {
     fi
 
     # Drop the job scheduled last time
-    if job_exists "$old_job"; then
-        atrm "$old_job" >/dev/null 2>&1 || true
-    fi
+    remove_job "$old_job"
 
-    local timespec output job_id
-    timespec="$(date -d "@$target" '+%Y%m%d%H%M.%S')"
-
-    output="$(
-        printf '%q scheduled %q\n' "$SELF" "$id" |
-            LC_ALL=C at -t "$timespec" 2>&1
-    )" || {
-        log "[$id] Failed to schedule at job: $output"
-        return 1
-    }
-
-    job_id="$(
-        printf '%s\n' "$output" |
-            awk '/^job [0-9]+ / {print $2; exit}'
-    )"
+    local job_id
+    job_id="$(submit_job "$target" scheduled "$id")" || return 1
 
     if [[ -z "$job_id" ]]; then
-        log "[$id] Could not determine at job id: $output"
+        log "[$id] Could not determine the job id"
         return 1
     fi
 
@@ -769,7 +958,7 @@ arm_job() {
     pset "$id" at_target "$target"
     pset "$id" at_reason "$reason"
 
-    log "[$id] Scheduled job=$job_id target=$(date -d "@$target" '+%Y-%m-%d %H:%M:%S') reason=$reason"
+    log "[$id] Scheduled job=$job_id target=$(fmt_time "$target" '+%Y-%m-%d %H:%M:%S') reason=$reason"
 }
 
 # --------------------------------------------------------------- the anchor
@@ -778,8 +967,8 @@ arm_job() {
 anchor_after() {
     local from="$1" anchor="$2" day today
 
-    day="$(date -d "@$from" '+%Y-%m-%d')" || return 1
-    today="$(date -d "$day $anchor" +%s 2>/dev/null)" || return 1
+    day="$(fmt_time "$from" '+%Y-%m-%d')" || return 1
+    today="$(parse_time "$day $anchor" 2>/dev/null)" || return 1
 
     if (( today >= from )); then
         printf '%s\n' "$today"
@@ -788,8 +977,8 @@ anchor_after() {
 
     # Tomorrow's date, then the time: `date -d "<date> <time> + 1 day"` reads
     # the "+ 1" as a UTC offset instead of a day, which silently shifts the hour
-    day="$(date -d "@$((from + 86400))" '+%Y-%m-%d')" || return 1
-    date -d "$day $anchor" +%s 2>/dev/null
+    day="$(fmt_time "$((from + 86400))" '+%Y-%m-%d')" || return 1
+    parse_time "$day $anchor" 2>/dev/null
 }
 
 # Hold a window back so that none ever runs across the anchor time.
@@ -825,7 +1014,7 @@ arm_window() {
     anchored="$(apply_anchor "$(window_seconds "$id")" "$target")"
 
     if (( anchored != target )); then
-        log "[$id] Holding the next window until the anchor at $(date -d "@$anchored" '+%H:%M')"
+        log "[$id] Holding the next window until the anchor at $(fmt_time "$anchored" '+%H:%M')"
         target="$anchored"
         reason="anchor-hold"
     fi
@@ -838,6 +1027,9 @@ arm_window() {
 # Is atd running? 0 yes, 1 no, 2 cannot tell. systemd first, then the process
 # itself, for systems without systemd (WSL, containers) or an atd started by hand.
 scheduler_running() {
+    # launchd is always there; a job it did not run shows up as overdue
+    [[ "$SCHEDULER" == launchd ]] && return 0
+
     if command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet atd 2>/dev/null; then
         return 0
     fi
@@ -871,8 +1063,7 @@ maybe_check_stall() {
     (( now >= last + STALL_GRACE )) || return 0
 
     (
-        exec 7>"$STATE/stall.lock"
-        flock -n 7 || exit 0
+        take_lock 7 "$STATE/stall.lock" try || exit 0
         check_stall "$id" "$target"
     ) </dev/null >/dev/null 2>&1 &
 }
@@ -889,9 +1080,11 @@ check_stall() {
     job="$(pget "$id" at_job)"
     job_exists "$job" || return 0
 
-    log "[$id] Scheduled run is overdue and still queued: job=$job target=$(date -d "@$target" '+%Y-%m-%d %H:%M:%S')"
+    log "[$id] Scheduled run is overdue and still queued: job=$job target=$(fmt_time "$target" '+%Y-%m-%d %H:%M:%S')"
+    local hint="Is atd running? Start it with: sudo systemctl enable --now atd"
+    [[ "$SCHEDULER" == launchd ]] && hint="launchd did not run it; see ~/.fluid/fluid.log"
     notify_once "$STATE" stalled "scheduler-stalled" \
-        "Fluid's run scheduled for $(date -d "@$target" '+%H:%M') has not happened, so nothing is being kept open. Is atd running? Start it with: sudo systemctl enable --now atd"
+        "Fluid's run scheduled for $(fmt_time "$target" '+%H:%M') has not happened, so nothing is being kept open. $hint"
 }
 
 # ------------------------------------------------------------- observations
@@ -964,7 +1157,7 @@ statusline() {
     reset="$(pget "$id" resets_at)"
 
     if [[ "$reset" =~ ^[0-9]+$ ]]; then
-        printf '%s%% used | resets %s\n' "${pct:-?}" "$(date -d "@$reset" '+%H:%M')"
+        printf '%s%% used | resets %s\n' "${pct:-?}" "$(fmt_time "$reset" '+%H:%M')"
     fi
 }
 
@@ -989,10 +1182,8 @@ do_warmup() {
     dir="$(pstate "$id")"
     mkdir -p "$dir"
 
-    exec 8>"$dir/warmup.lock"
-
     # Never let two warmups run at once
-    if ! flock -n 8; then
+    if ! take_lock 8 "$dir/warmup.lock" try; then
         return 0
     fi
 
@@ -1138,6 +1329,12 @@ process_start() {
     local stat
 
     [[ "${1:-}" =~ ^[0-9]+$ ]] || return 0
+    # No /proc on macOS; ps gives the start time as text, which compares as well
+    if [[ ! -d /proc/self ]]; then
+        ps -o lstart= -p "$1" 2>/dev/null
+        return 0
+    fi
+
     stat="$(cat "/proc/$1/stat" 2>/dev/null)" || return 0
 
     # Field 22. The command name in field 2 may hold spaces, so cut past ") "
@@ -1173,7 +1370,7 @@ resume_due() {
 # One resume job per provider, at the earliest time any session needs it. A
 # job already queued for earlier is kept, and re-arms for the rest when it runs.
 arm_resume() {
-    local id="$1" target="$2" now job old output
+    local id="$1" target="$2" now job old
     now="$(date +%s)"
     (( target > now )) || target=$((now + 5))
 
@@ -1183,17 +1380,10 @@ arm_resume() {
     if [[ "$old" =~ ^[0-9]+$ ]] && (( old > now && old <= target )) && job_exists "$job"; then
         return 0
     fi
-    job_exists "$job" && atrm "$job" >/dev/null 2>&1
+    remove_job "$job"
 
-    output="$(
-        printf '%q resume %q\n' "$SELF" "$id" |
-            LC_ALL=C at -t "$(date -d "@$target" '+%Y%m%d%H%M.%S')" 2>&1
-    )" || {
-        log "[$id] Failed to schedule resume job: $output"
-        return 1
-    }
-
-    pset "$id" resume_job "$(awk '/^job [0-9]+ / {print $2; exit}' <<< "$output")"
+    job="$(submit_job "$target" resume "$id")" || return 1
+    pset "$id" resume_job "$job"
     pset "$id" resume_target "$target"
 }
 
@@ -1234,7 +1424,7 @@ rate_limit() {
           pane_pid: $pane_pid, fg: $fg, fg_start: $fg_start, due: $due, attempts: $attempts}' \
         > "$file.tmp.$$" && mv "$file.tmp.$$" "$file"
 
-    log "[$id] Usage limit hit session=$session pane=$pane; checking again at $(date -d "@$(jq -r .due "$file")" '+%Y-%m-%d %H:%M:%S')"
+    log "[$id] Usage limit hit session=$session pane=$pane; checking again at $(fmt_time "$(jq -r .due "$file")" '+%Y-%m-%d %H:%M:%S')"
     arm_resume "$id" "$(jq -r .due "$file")"
 }
 
@@ -1243,8 +1433,7 @@ resume() {
     dir="$(pstate "$id")"
     mkdir -p "$dir/pending"
 
-    exec 6>"$dir/resume.lock"
-    flock 6
+    take_lock 6 "$dir/resume.lock"
 
     shopt -s nullglob
     for file in "$dir"/pending/*.json; do
@@ -1321,7 +1510,7 @@ show_status() {
 
     scheduler_running
     case $? in
-        0) scheduler="atd running" ;;
+        0) [[ "$SCHEDULER" == launchd ]] && scheduler="launchd" || scheduler="atd running" ;;
         1) scheduler="ATD NOT RUNNING - nothing scheduled will run" ;;
         *) scheduler="unknown" ;;
     esac
@@ -1361,7 +1550,7 @@ show_status() {
         fi
 
         if [[ "$reset" =~ ^[0-9]+$ ]]; then
-            echo "  Window        : ${pct:-?}% used, $((window / 60))min, resets $(date -d "@$reset" '+%Y-%m-%d %H:%M:%S')"
+            echo "  Window        : ${pct:-?}% used, $((window / 60))min, resets $(fmt_time "$reset" '+%Y-%m-%d %H:%M:%S')"
         else
             echo "  Window        : unknown"
         fi
@@ -1372,7 +1561,7 @@ show_status() {
             if (( $(date +%s) > target + STALL_GRACE )) && job_exists "$job"; then
                 overdue=" (OVERDUE, still queued)"
             fi
-            echo "  Scheduled     : $(date -d "@$target" '+%Y-%m-%d %H:%M:%S')$overdue"
+            echo "  Scheduled     : $(fmt_time "$target" '+%Y-%m-%d %H:%M:%S')$overdue"
             echo "  Reason        : ${reason:-none}   at job: ${job:-none}"
         else
             echo "  Scheduled     : none"
@@ -1385,10 +1574,10 @@ show_status() {
         echo "  Failures      : ${failures:-0}   auth: $([[ -f "$dir/auth_required" ]] && echo 'RELOGIN MAY BE REQUIRED' || echo OK)"
 
         if [[ "$last_run" =~ ^[0-9]+$ ]]; then
-            echo "  Last run      : $(date -d "@$last_run" '+%Y-%m-%d %H:%M:%S')"
+            echo "  Last run      : $(fmt_time "$last_run" '+%Y-%m-%d %H:%M:%S')"
         fi
         if [[ "$last_success" =~ ^[0-9]+$ ]]; then
-            echo "  Last warmup   : $(date -d "@$last_success" '+%Y-%m-%d %H:%M:%S')"
+            echo "  Last warmup   : $(fmt_time "$last_success" '+%Y-%m-%d %H:%M:%S')"
         fi
     done
 }
@@ -1574,7 +1763,7 @@ claude_capabilities() {
 # turn is the limit error, and nobody has cancelled the automatic continue
 # since: Claude Code writes "Automatic continue cancelled" when Esc is pressed.
 claude_stuck() {
-    tac "$1" 2>/dev/null |
+    reverse_lines "$1" 2>/dev/null |
         jq -rR 'fromjson? | select(.type == "user" or .type == "assistant"
                    or (.type == "system" and ((.content // "") | tostring | test("Automatic continue cancelled"))))
                | if .type == "assistant" and .error == "rate_limit" then "stuck" else "moving" end' 2>/dev/null |
@@ -1612,7 +1801,7 @@ claude_warmup() {
 
     [[ -n "$model" ]] && args+=(--model "$model")
 
-    timeout 180 claude "${args[@]}" 'Reply only OK.' 2>&1
+    with_timeout 180 claude "${args[@]}" 'Reply only OK.' 2>&1
 }
 PROVIDER_CLAUDE
 
@@ -1652,7 +1841,7 @@ codex_pull_limits() {
     newest="$(ls -t "$HOME"/.codex/sessions/*/*/*/rollout-*.jsonl 2>/dev/null | head -1)"
     [[ -n "$newest" ]] || return 1
 
-    tac "$newest" |
+    reverse_lines "$newest" |
         jq -cR 'fromjson? | select(.payload.rate_limits != null) | {rate_limits: .payload.rate_limits}' 2>/dev/null |
         head -1
 }
@@ -1663,7 +1852,7 @@ codex_warmup() {
 
     [[ -n "$model" ]] && args+=(-m "$model")
 
-    timeout 180 codex "${args[@]}" 'Reply only OK.' 2>&1
+    with_timeout 180 codex "${args[@]}" 'Reply only OK.' 2>&1
 }
 PROVIDER_CODEX
 
@@ -1710,7 +1899,7 @@ agy_warmup() {
 
     [[ -n "$model" ]] && args+=(--model "$model")
 
-    timeout 180 agy "${args[@]}" 'Reply only OK.' 2>&1
+    with_timeout 180 agy "${args[@]}" 'Reply only OK.' 2>&1
 }
 PROVIDER_AGY
 

@@ -31,10 +31,11 @@
 
 ## المتطلبات
 
-نظام Linux مع `jq` و`at` (مع تشغيل `atd`) و`flock` و`timeout` و`date` من GNU، وواحد على الأقل من `claude` أو `codex` أو `agy`. ويلزم `tmux` لميزة الاستئناف. على Windows، شغّل Claude Code داخل WSL مع تفعيل systemd حتى يتمكن atd من العمل. أما macOS فغير مدعوم بعد.
+نظام Linux أو macOS، مع `jq` وواحد على الأقل من `claude` أو `codex` أو `agy`. على Linux تُجدوَل المهام عبر `at`، لذا يجب أن يكون `atd` قيد التشغيل؛ أما على macOS فيتولاها launchd دون أي إعداد. ويلزم `tmux` لميزة الاستئناف. على Windows، شغّل Claude Code داخل WSL مع تفعيل systemd حتى يتمكن atd من العمل.
 
 ```bash
-sudo systemctl enable --now atd
+sudo systemctl enable --now atd   # Linux
+brew install jq tmux              # macOS
 ```
 
 ## التثبيت

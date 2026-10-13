@@ -9,8 +9,9 @@ brought Resume back as a backstop behind the agent's own continue, and 4.3.0
 packaged it as a Claude Code plugin named `fluid` (`tailwind` before 4.3.2,
 which came too close to other listings), and the whole project was then renamed
 from Claude Plus to Fluid, starting over at 0.1.0 (repository, npm package `fluid-agents`, and
-`~/.fluid` in place of `~/.claude/claude-plus`, with no migration); nothing
-else has been started. Code is referred to by
+`~/.fluid` in place of `~/.claude/claude-plus`, with no migration), and 0.2.0 added macOS:
+launchd one-shot agents instead of `at`, with stand-ins for flock, GNU
+date, timeout, tac and /proc; nothing else has been started. Code is referred to by
 function name rather than line number, since lines move.
 
 ## Features
@@ -38,12 +39,13 @@ generated script would close this.
 
 ### Low priority
 
-- macOS (planned for 0.2.0): `at` is there but atd is off by default, and
-  `flock`, GNU `date`, `timeout` and `/proc` are missing. launchd one-shot
-  jobs, an `mkdir` lock, a date helper that speaks BSD too, and `ps -o
-  lstart` would cover it, with a macOS runner in CI. Native Windows is out of
-  reach for Resume (no way to type into a terminal pane) and would need
-  `schtasks`; WSL works as Linux.
+- Native Windows: Resume is out of reach there (nothing can type into a
+  terminal pane from outside), and runs would need `schtasks`. WSL works as
+  Linux, so this waits for someone to ask.
+- macOS (0.2.0) is tested in CI on the system bash 3.2 with fake launchd, but
+  not yet on a real Mac: a one-shot agent's behaviour across sleep, and
+  `launchctl bootstrap` from an SSH session with nobody logged in, are
+  unverified.
 
 - No way to turn one agent off without uninstalling. Deleting its file under
   `providers/` works until the next upgrade rewrites it.

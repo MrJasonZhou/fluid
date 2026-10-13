@@ -31,10 +31,11 @@ Cada agente tem a própria janela, o próprio agendamento e os próprios avisos;
 
 ## Requisitos
 
-Linux, com `jq`, `at` (com `atd` em execução), `flock`, `timeout`, GNU `date`, e pelo menos um entre `claude`, `codex` e `agy`. A Retomada precisa de `tmux`. No Windows, rode o Claude Code dentro do WSL com o systemd ativado, para que o atd possa iniciar. O macOS ainda não é suportado.
+Linux ou macOS, com `jq` e pelo menos um entre `claude`, `codex` e `agy`. No Linux, as execuções são agendadas com `at`, então o `atd` precisa estar rodando; no macOS quem cuida disso é o launchd, sem nada para configurar. A Retomada precisa de `tmux`. No Windows, rode o Claude Code dentro do WSL com o systemd ativado, para que o atd possa iniciar.
 
 ```bash
-sudo systemctl enable --now atd
+sudo systemctl enable --now atd   # Linux
+brew install jq tmux              # macOS
 ```
 
 ## Instalação

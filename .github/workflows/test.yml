@@ -6,8 +6,21 @@ on:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-      # jq, flock and timeout ship with the runner; claude and at are faked
+      # macOS: run everything on the system bash 3.2, not a newer one from
+      # Homebrew, and without GNU coreutils, as a user's Mac would be
+      - if: runner.os == 'macOS'
+        run: |
+          mkdir -p "$RUNNER_TEMP/bin"
+          ln -s /bin/bash "$RUNNER_TEMP/bin/bash"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+          /bin/bash --version | head -1
+          for t in timeout gtimeout tac flock; do command -v "$t" || true; done
+      # jq ships with both runners; claude, at, launchctl and tmux are faked
       - run: bash tests/run.sh

@@ -21,6 +21,10 @@ QUEUE="$CP_TEST/queue"
 mkdir -p "$FAKES" "$QUEUE"
 trap 'rm -rf "$CP_TEST"' EXIT
 
+# The suite runs on the at scheduler wherever it is; the macOS section below
+# switches to launchd itself
+export FLUID_SCHEDULER=at
+
 PASS=0
 FAIL=0
 
@@ -170,6 +174,16 @@ case "$*" in
 esac
 EOF
 
+# launchctl: logs what it is asked, and loads unless told to refuse
+cat > "$FAKES/launchctl" <<'EOF'
+#!/usr/bin/env bash
+echo "$*" >> "$CP_TEST/launchctl-log"
+case "$1" in
+    bootstrap|load) [[ ! -e "$CP_TEST/launchctl-refuse" ]] ;;
+    *) exit 0 ;;
+esac
+EOF
+
 # uname: the kernel name a test picks, the real answer otherwise
 cat > "$FAKES/uname" <<'EOF'
 #!/usr/bin/env bash
@@ -192,6 +206,18 @@ new_home() {
     rm -f "$QUEUE"/* "$CP_TEST"/claude-mode "$CP_TEST"/claude-runs "$CP_TEST"/claude-args "$CP_TEST"/codex-runs "$CP_TEST"/agy-runs "$CP_TEST"/notify-*
     AGYS="$H/.gemini/antigravity-cli/settings.json"
     echo up > "$CP_TEST/atd"
+}
+
+# GNU date and timeout on Linux, their BSD and perl stand-ins on macOS
+tdate() {
+    date -d "@$1" "$2" 2>/dev/null || date -r "$1" "$2"
+}
+tmo() {
+    if command -v timeout >/dev/null 2>&1; then
+        timeout "$@"
+    else
+        perl -e 'alarm shift; exec @ARGV or exit 127' "$@"
+    fi
 }
 
 # Poll a condition for up to three seconds, for work done in the background
@@ -225,7 +251,7 @@ cp_run() {
 
 render() {
     printf '{"model":{"display_name":"x"},"workspace":{"current_dir":"/tmp"}}' |
-        in_home timeout 5 bash -c "$(jq -r .statusLine.command "$S")"
+        in_home tmo 5 bash -c "$(jq -r .statusLine.command "$S")"
 }
 
 our_jobs() {
@@ -308,12 +334,12 @@ check "uninstall: directory gone"      '[[ ! -e "$BASE" ]]'
 check "uninstall: no jobs of ours"     '[[ $(our_jobs) == 0 && -e "$QUEUE/2" ]]'
 check "uninstall: backup made"         'compgen -G "$S.fluid-uninstall-backup.*" >/dev/null'
 
-before="$(md5sum < "$S")"
+before="$(cksum < "$S")"
 out="$(install_cp uninstall)"
 rc=$?
 check "uninstall again: exit 0"          '[[ $rc == 0 ]]'
 check "uninstall again: not installed"   '[[ $out == *"not installed"* ]]'
-check "uninstall again: file untouched"  '[[ $(md5sum < "$S") == "$before" ]]'
+check "uninstall again: file untouched"  '[[ $(cksum < "$S") == "$before" ]]'
 
 new_home nosettings
 install_cp uninstall >/dev/null
@@ -321,10 +347,10 @@ check "no settings.json: none created"   '[[ ! -e "$S" ]]'
 
 new_home badjson
 echo '{broken' > "$S"
-before="$(md5sum < "$S")"
+before="$(cksum < "$S")"
 install_cp uninstall >/dev/null 2>&1
 rc=$?
-check "invalid JSON: refused"            '[[ $rc == 1 && $(md5sum < "$S") == "$before" ]]'
+check "invalid JSON: refused"            '[[ $rc == 1 && $(cksum < "$S") == "$before" ]]'
 
 install_cp --help >/dev/null 2>&1; rc=$?
 check "--help exits 0"                   '[[ $rc == 0 ]]'
@@ -374,9 +400,9 @@ out="$(install_cp uninstall)"
 check "uninstall: leaves pass-through" '[[ $out == *pass-through* ]] && grep -q "was uninstalled" "$CP"'
 check "uninstall: chain still renders" '[[ $(render) == "X[CS]" ]]'
 check "uninstall: runtime state gone"  '[[ ! -e "$BASE/state/claude/at_target" ]] && [[ -s "$ORIGFILE" ]]'
-before="$(md5sum < "$S")"
+before="$(cksum < "$S")"
 install_cp uninstall >/dev/null
-check "uninstall again: still renders" '[[ $(render) == "X[CS]" && $(md5sum < "$S") == "$before" ]]'
+check "uninstall again: still renders" '[[ $(render) == "X[CS]" && $(cksum < "$S") == "$before" ]]'
 in_home "$FAKES/xwrap" uninstall
 install_cp uninstall >/dev/null
 check "wrapper gone: original back"    '[[ $(jq -r .statusLine.command "$S") == "$FAKES/cs" && ! -e "$BASE" ]]'
@@ -712,7 +738,7 @@ anchor_cases() {
     run() {
         printf '%s\n' "$2" > "$ANCHOR"
         printf '%s @ %s|%s|%s\n' "$1" "$2" \
-            "$(date -d "@$(apply_anchor 18000 "$(date -d "$1" +%s)")" '+%F %H:%M')" "$3"
+            "$(fmt_time "$(apply_anchor 18000 "$(parse_time "$1")")" '+%F %H:%M')" "$3"
     }
 
     run "2026-09-21 03:00" "06:00" "2026-09-21 06:00"   # held
@@ -745,7 +771,7 @@ observe_reset() {
     printf '{"rate_limits":{"five_hour":{"resets_at":%s,"used_percentage":10}}}' "$1" | cp_run observe claude >/dev/null
 }
 # The HH:MM, and the epoch second, of a moment given as an offset from now
-at_hhmm() { date -d "@$(( NOW + $1 ))" '+%H:%M'; }
+at_hhmm() { tdate "$(( NOW + $1 ))" '+%H:%M'; }
 at_epoch() { echo $(( (NOW + $1) / 60 * 60 )); }
 
 check "no anchor by default"          '[[ $(cp_run anchor) == "Anchor: not set" ]]'
@@ -948,17 +974,73 @@ install_cp uninstall >/dev/null
 # ======================================================================
 section "unsupported systems are told so before anything changes"
 
-for k in Darwin MINGW64_NT-10.0 FreeBSD; do
+for k in MINGW64_NT-10.0 FreeBSD; do
     new_home "os-$k"
     with_cs
     echo "$k" > "$CP_TEST/uname"
     out="$(install_cp 2>&1)"; rc=$?
     check "$k: refused"        '[[ $rc == 1 && ! -e "$BASE" && $(jq -r .statusLine.command "$S") == "$FAKES/cs" ]]'
     case "$k" in
-        Darwin) check "$k: says macOS"  '[[ $out == *"macOS"* ]]' ;;
         MINGW*) check "$k: points to WSL" '[[ $out == *"WSL"* ]]' ;;
     esac
 done
+rm -f "$CP_TEST/uname"
+
+# ======================================================================
+section "macOS queues runs as one-shot launchd agents"
+
+new_home mac
+with_cs
+echo Darwin > "$CP_TEST/uname"
+rm -f "$CP_TEST/launchctl-log" "$CP_TEST/launchctl-refuse"
+AGENTS="$H/Library/LaunchAgents"
+mac() {
+    in_home env -u FLUID_SCHEDULER "$@"
+}
+plists() {
+    ls "$AGENTS"/io.github.mrjasonzhou.fluid.*.plist 2>/dev/null | wc -l
+}
+reading() {
+    printf '{"rate_limits":{"five_hour":{"used_percentage":10,"resets_at":%s}}}' "$1" |
+        mac "$CP" observe claude
+}
+
+mac bash "$INSTALLER" >/dev/null 2>&1; rc=$?
+check "installs on macOS"                 '[[ $rc == 0 && $(jq -r .statusLine.command "$S") == "$CP statusline claude" ]]'
+check "no at job"                         '[[ $(our_jobs) == 0 ]]'
+check "status names launchd"              '[[ $(mac "$CP" status) == *"Scheduler       : launchd"* ]]'
+
+T1=$(( $(date +%s) + 7200 ))
+T1=$(( T1 - T1 % 60 + 20 ))               # 20 s past a minute, plus the 15 s of slack
+reading "$T1"
+P="$(ls "$AGENTS"/*.plist 2>/dev/null | head -1)"
+job="$(cat "$BASE/state/claude/at_job")"
+check "a reading queues one agent"        '[[ $(plists) == 1 && $P == *".$job.plist" ]]'
+check "and loads it"                      'grep -q "^bootstrap gui/$(id -u) $P$" "$CP_TEST/launchctl-log"'
+up=$(( (T1 + 15) / 60 * 60 + 60 ))
+check "rounded up to the next minute"     'grep -q "<integer>$((10#$(tdate "$up" +%M)))</integer>" "$P" && [[ $job == "$up-"* ]]'
+check "runs fluid.sh scheduled claude"    'grep -q "<string>$CP</string>" "$P" && grep -q "<string>scheduled</string>" "$P"'
+
+reading "$(( T1 + 600 ))"
+check "a new reading replaces it"         '[[ $(plists) == 1 && ! -e $P ]] && grep -q "^remove io.github.mrjasonzhou.fluid.$job$" "$CP_TEST/launchctl-log"'
+
+# Run the agent the way launchd would: its own arguments, in order
+P="$(ls "$AGENTS"/*.plist | head -1)"
+ARGV=()
+while IFS= read -r line; do ARGV+=("$line"); done < <(sed -n 's:.*<string>\(.*\)</string>.*:\1:p' "$P" | sed 1d)
+rm -f "$CP_TEST/claude-runs"
+mac "${ARGV[@]}"
+check "the agent deletes itself and warms up" '[[ ! -e $P && $(count run claude-runs) == 1 ]]'
+check "and queues the next window"        '[[ $(plists) == 1 ]]'
+
+touch "$CP_TEST/launchctl-refuse"
+reading "$(( T1 + 1200 ))"
+check "a refused agent leaves no plist"   '[[ $(plists) == 0 ]] && grep -q "launchd refused" "$BASE/fluid.log"'
+rm -f "$CP_TEST/launchctl-refuse"
+
+reading "$(( T1 + 1800 ))"
+mac bash "$INSTALLER" uninstall >/dev/null
+check "uninstall removes the agents"      '[[ $(plists) == 0 && ! -e "$BASE" ]]'
 rm -f "$CP_TEST/uname"
 
 # ======================================================================

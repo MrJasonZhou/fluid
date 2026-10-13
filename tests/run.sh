@@ -703,8 +703,8 @@ check "its other settings untouched" '[[ $(jq -r .model "$AGYS") == gemini && $(
 check "claude wrapped separately"    '[[ $(jq -r .statusLine.command "$S") == "$CP statusline claude" ]]'
 
 NOW="$(date +%s)"
-RESET="$(date -u -d "@$(( NOW + 1200 ))" '+%Y-%m-%dT%H:%M:%SZ')"
-WEEK="$(date -u -d "@$(( NOW + 400000 ))" '+%Y-%m-%dT%H:%M:%SZ')"
+RESET="$(TZ=UTC tdate "$(( NOW + 1200 ))" '+%Y-%m-%dT%H:%M:%SZ')"
+WEEK="$(TZ=UTC tdate "$(( NOW + 400000 ))" '+%Y-%m-%dT%H:%M:%SZ')"
 printf '{"quota":{"gemini-5h":{"remaining_fraction":1,"reset_time":"%s"},"3p-5h":{"remaining_fraction":0.75,"reset_time":"%s"},"gemini-weekly":{"remaining_fraction":0.9,"reset_time":"%s"}}}' \
     "$RESET" "$RESET" "$WEEK" | cp_run observe agy >/dev/null
 

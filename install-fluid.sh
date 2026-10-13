@@ -743,12 +743,13 @@ fmt_time() {
     fi
 }
 
-# The epoch second of a local "YYYY-MM-DD HH:MM"
+# The epoch second of a local "YYYY-MM-DD HH:MM". BSD date fills any field
+# the format leaves out from the current time, so the seconds are spelled out.
 parse_time() {
     if (( GNU_DATE )); then
         date -d "$1" +%s
     else
-        date -j -f '%Y-%m-%d %H:%M' "$1" +%s
+        date -j -f '%Y-%m-%d %H:%M:%S' "$1:00" +%s
     fi
 }
 

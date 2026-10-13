@@ -7,7 +7,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "s=\"$HOME/.claude/claude-plus/claude-plus.sh\"; [ -x \"$s\" ] && exec \"$s\" rate-limit claude; cat >/dev/null",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/tailwind.sh\" rate-limit",
             "timeout": 10
           }
         ]

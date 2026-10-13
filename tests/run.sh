@@ -949,17 +949,22 @@ with_cs
 echo '{"type":"assistant","error":"rate_limit"}' > "$H/t.jsonl"
 plugin_hook() {
     printf '{"session_id":"p1","transcript_path":"%s"}' "$H/t.jsonl" |
-        in_home env TMUX=/tmp/sock,1,0 TMUX_PANE=%7 bash -c "$HOOK"
+        in_home env CLAUDE_PLUGIN_ROOT="$ROOT" TMUX=/tmp/sock,1,0 TMUX_PANE=%7 bash -c "$HOOK"
 }
 plugin_hook; rc=$?
 check "hook before install: quiet no-op" '[[ $rc == 0 && ! -e "$BASE" ]]'
 
-in_home env CLAUDE_PLUS_HOOK=plugin bash "$INSTALLER" >/dev/null
+check "status before install says so" '[[ $(in_home "$ROOT/scripts/tailwind.sh" status) == *"/tailwind:install"* ]]'
+in_home "$ROOT/scripts/tailwind.sh" install >/dev/null
 check "plugin install: status line wrapped" '[[ $(jq -r .statusLine.command "$S") == "$CP statusline claude" ]]'
 check "plugin install: no hook in settings" '! jq -e .hooks.StopFailure "$S" >/dev/null'
 
 echo "$$" > "$CP_TEST/tmux-pane-pid"
 plugin_hook
+in_home "$ROOT/scripts/tailwind.sh" anchor '07:00;touch x' >/dev/null; rc=$?
+check "anchor refuses anything but HH:MM|off" '[[ $rc == 2 && ! -e "$BASE/anchor" ]]'
+in_home "$ROOT/scripts/tailwind.sh" anchor 07:30 >/dev/null
+check "anchor takes a time"              '[[ $(cat "$BASE/anchor") == 07:30 ]]'
 check "the plugin hook records the session" '[[ $(jq -r .pane "$BASE/state/claude/pending/p1.json") == %7 ]]'
 install_cp uninstall >/dev/null
 

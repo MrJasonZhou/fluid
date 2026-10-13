@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Claude Plus - enhancements for Claude Code
+# Fluid - enhancements for Claude Code
 # Copyright (C) 2026 Jason Zhou
 #
 # This program is free software: you can redistribute it and/or modify it
@@ -8,13 +8,13 @@
 # option) any later version. See the LICENSE file for details.
 set -euo pipefail
 
-BASE="$HOME/.claude/claude-plus"
+BASE="$HOME/.fluid"
 STATE="$BASE/state"
-BIN="$BASE/claude-plus.sh"
+BIN="$BASE/fluid.sh"
 PROVIDERS="$BASE/providers"
 NOTIFY="$BASE/notify.sh"
 ANCHOR="$BASE/anchor"
-MARKER="/claude-plus/claude-plus.sh"
+MARKER="/.fluid/fluid.sh"
 
 # Agents that run a status line command of our choosing, and where each keeps
 # its settings. Wrapping one means editing that file, so only agents actually
@@ -44,8 +44,8 @@ usage() {
     cat >&2 <<USAGE
 Usage: $(basename "$0") [install|uninstall]
 
-  install     Install or upgrade Claude Plus (the default)
-  uninstall   Remove Claude Plus and leave the rest of settings.json alone
+  install     Install or upgrade Fluid (the default)
+  uninstall   Remove Fluid and leave the rest of settings.json alone
 USAGE
 }
 
@@ -60,7 +60,7 @@ require() {
     done
 }
 
-# The one definition of "what Claude Plus added to settings.json", used by
+# The one definition of "what Fluid added to settings.json", used by
 # both upgrade and uninstall so the two can never disagree.
 #
 # It works on the current file rather than restoring a backup, because the
@@ -139,14 +139,14 @@ write_passthrough() {
 
     {
         echo '#!/usr/bin/env bash'
-        echo '# Claude Plus was uninstalled, but another program had wrapped the status'
+        echo '# Fluid was uninstalled, but another program had wrapped the status'
         echo '# line around it and still calls this path. This pass-through keeps that'
-        echo '# chain working by rendering the command Claude Plus used to wrap. Run the'
+        echo '# chain working by rendering the command Fluid used to wrap. Run the'
         echo '# uninstaller again once nothing calls it, and it goes away for good.'
 
         # Same loop guard as the real script
-        echo '[[ -z "${CLAUDE_PLUS_IN_STATUSLINE:-}" ]] || exit 0'
-        echo 'export CLAUDE_PLUS_IN_STATUSLINE=1'
+        echo '[[ -z "${FLUID_IN_STATUSLINE:-}" ]] || exit 0'
+        echo 'export FLUID_IN_STATUSLINE=1'
         # The caller names the agent, so the right command is rendered
         printf 'state=%q\n' "$STATE"
         echo 'if [[ "${1:-}" == statusline ]]; then'
@@ -161,7 +161,7 @@ write_passthrough() {
     mv "$tmp" "$dest"
 }
 
-PROBE_INPUT='{"hook_event_name":"Status","session_id":"claude-plus-probe","transcript_path":"/dev/null","cwd":"/tmp","model":{"id":"claude","display_name":"Claude"},"workspace":{"current_dir":"/tmp","project_dir":"/tmp"},"version":"0","output_style":{"name":"default"}}'
+PROBE_INPUT='{"hook_event_name":"Status","session_id":"fluid-probe","transcript_path":"/dev/null","cwd":"/tmp","model":{"id":"claude","display_name":"Claude"},"workspace":{"current_dir":"/tmp","project_dir":"/tmp"},"version":"0","output_style":{"name":"default"}}'
 
 # Does this status line command end up running our script?
 #
@@ -203,7 +203,7 @@ write_probe() {
 
     {
         echo '#!/usr/bin/env bash'
-        echo '# Temporary: Claude Plus is checking whether another status line program'
+        echo '# Temporary: Fluid is checking whether another status line program'
         echo '# calls it. See chain_calls_us() in the installer.'
         echo 'if [[ "${1:-}" == statusline ]]; then'
         printf '    : > %q\n' "$PROBE_DIR/called"
@@ -249,14 +249,14 @@ chain_calls_us() {
     return "$rc"
 }
 
-# Take Claude Plus off this machine: our entries in the current settings.json,
+# Take Fluid off this machine: our entries in the current settings.json,
 # our at jobs, and our directory. Each step touches only what is ours and does
 # nothing when that part is already gone, so this is safe to run again, and
 # safe to run on an installation that is only half there.
 #
 # Settings and at jobs are always cleared. Files are where upgrade and
 # uninstall part ways: names passed as arguments survive inside
-# ~/.claude/claude-plus, and with none the whole directory goes. Uninstall
+# ~/.fluid, and with none the whole directory goes. Uninstall
 # keeps nothing (or only what a pass-through needs); upgrade keeps the runtime
 # state and the user's notifier, then schedules the next run again itself.
 remove_installation() {
@@ -309,40 +309,6 @@ remove_installation() {
     fi
 }
 
-# Versions before 4.0.0 handled one agent, keeping its state flat in state/
-# and the wrapped command at the top of the directory. Move both into place
-# before anything reads them.
-migrate_to_providers() {
-    local f from to
-
-    [[ -d "$STATE" ]] || return 0
-    [[ -e "$STATE/at_target" || -e "$BASE/original-statusline-command" ]] || return 0
-
-    mkdir -p "$STATE/claude"
-
-    for f in at_job at_target at_reason auth_required failure_count last_run \
-             last_success notified-auth notified-failing schedule.lock warmup.lock; do
-        [[ -e "$STATE/$f" ]] && mv -f "$STATE/$f" "$STATE/claude/$f"
-    done
-
-    # The same numbers, under the names the provider interface uses
-    while read -r from to; do
-        [[ -e "$STATE/$from" ]] && mv -f "$STATE/$from" "$STATE/claude/$to"
-    done <<'RENAMES'
-five_hour_reset resets_at
-five_hour_pct used_percent
-seven_day_reset long_resets_at
-seven_day_pct long_used_percent
-RENAMES
-
-    [[ -e "$BASE/original-statusline-command" ]] &&
-        mv -f "$BASE/original-statusline-command" "$STATE/claude/original-statusline-command"
-
-    return 0
-}
-
-migrate_to_providers
-
 ACTION="${1:-install}"
 
 case "$ACTION" in
@@ -364,7 +330,7 @@ require jq
 for _id in $(wrapped_agents); do
     _file="$(agent_settings "$_id")" || continue
     if [[ -f "$_file" ]] && ! jq empty "$_file" 2>/dev/null; then
-        echo "$_file is not valid JSON. Fix it first; Claude Plus will not edit it." >&2
+        echo "$_file is not valid JSON. Fix it first; Fluid will not edit it." >&2
         exit 1
     fi
 done
@@ -393,8 +359,8 @@ survey_agents() {
             CHAIN_COMMANDS="$CHAIN_COMMANDS$id: $cmd"$'\n'
         fi
 
-        cp -p "$file" "$file.claude-plus-$suffix-backup.$STAMP"
-        BACKUPS="$BACKUPS$file.claude-plus-$suffix-backup.$STAMP"$'\n'
+        cp -p "$file" "$file.fluid-$suffix-backup.$STAMP"
+        BACKUPS="$BACKUPS$file.fluid-$suffix-backup.$STAMP"$'\n'
     done
 }
 
@@ -407,7 +373,7 @@ if [[ "$ACTION" == "uninstall" ]]; then
     if ! is_installed; then
         # Sweep anyway: an interrupted removal can leave an at job behind
         remove_installation
-        echo "Claude Plus is not installed; nothing to remove."
+        echo "Fluid is not installed; nothing to remove."
         exit 0
     fi
 
@@ -432,7 +398,7 @@ if [[ "$ACTION" == "uninstall" ]]; then
         write_passthrough "$BIN"
     fi
 
-    echo "Claude Plus uninstalled."
+    echo "Fluid uninstalled."
     if [[ -n "$BACKUPS" ]]; then
         echo "Settings were edited in place. Their state just before:"
         printf '%s' "$BACKUPS" | sed 's/^/  /'
@@ -440,7 +406,7 @@ if [[ "$ACTION" == "uninstall" ]]; then
 
     if [[ -n "$CHAINED" ]]; then
         echo
-        echo "A status line belonging to another program still calls Claude Plus:"
+        echo "A status line belonging to another program still calls Fluid:"
         printf '%s' "$CHAIN_COMMANDS" | sed 's/^/  /'
         echo "A pass-through was left at $BIN so it keeps working."
         echo "Once that program stops calling it, run uninstall again to remove it."
@@ -451,7 +417,7 @@ fi
 require at atq atrm flock date timeout
 
 if [[ -z "$(wrapped_agents)" ]] && ! command -v codex >/dev/null 2>&1; then
-    echo "None of the agents Claude Plus knows about are installed here." >&2
+    echo "None of the agents Fluid knows about are installed here." >&2
     echo "Looked for: claude, codex, agy" >&2
     exit 1
 fi
@@ -473,12 +439,8 @@ fi
 # what is still running (reset times, failure and notification state), the
 # user's notifier (it holds their credentials), the anchor and the log
 # The wrapped commands live under state/, which is kept anyway
-KEEP=("$(basename "$STATE")" "$(basename "$NOTIFY")" "$(basename "$ANCHOR")" "claude-plus.log")
+KEEP=("$(basename "$STATE")" "$(basename "$NOTIFY")" "$(basename "$ANCHOR")" "fluid.log")
 remove_installation "${KEEP[@]}"
-
-# Versions before 3.0.0 kept their own queue of rate-limited sessions here.
-# Resume came back in 4.2.0 as a backstop, with its queue under each agent.
-rm -rf "$STATE/pending" "$STATE/stale"
 
 mkdir -p "$BASE" "$STATE" "$PROVIDERS"
 
@@ -511,9 +473,9 @@ for _id in $(wrapped_agents); do
 done
 unset _id _file _current
 
-cat > "$BIN" <<'CLAUDE_PLUS'
+cat > "$BIN" <<'FLUID_SCRIPT'
 #!/usr/bin/env bash
-# Claude Plus - enhancements for coding agents
+# Fluid - enhancements for coding agents
 # Copyright (C) 2026 Jason Zhou
 #
 # This program is free software: you can redistribute it and/or modify it
@@ -522,15 +484,15 @@ cat > "$BIN" <<'CLAUDE_PLUS'
 # option) any later version. See the LICENSE file for details.
 set -u
 
-VERSION="4.3.2"
+VERSION="0.1.0"
 
-BASE="$HOME/.claude/claude-plus"
+BASE="$HOME/.fluid"
 STATE="$BASE/state"
 PROVIDERS="$BASE/providers"
 NOTIFY="$BASE/notify.sh"
 ANCHOR="$BASE/anchor"
-LOG="$BASE/claude-plus.log"
-SELF="$BASE/claude-plus.sh"
+LOG="$BASE/fluid.log"
+SELF="$BASE/fluid.sh"
 
 DEFAULT_WINDOW=18000
 STALL_GRACE=300
@@ -910,7 +872,7 @@ check_stall() {
 
     log "[$id] Scheduled run is overdue and still queued: job=$job target=$(date -d "@$target" '+%Y-%m-%d %H:%M:%S')"
     notify_once "$STATE" stalled "scheduler-stalled" \
-        "Claude Plus's run scheduled for $(date -d "@$target" '+%H:%M') has not happened, so nothing is being kept open. Is atd running? Start it with: sudo systemctl enable --now atd"
+        "Fluid's run scheduled for $(date -d "@$target" '+%H:%M') has not happened, so nothing is being kept open. Is atd running? Start it with: sudo systemctl enable --now atd"
 }
 
 # ------------------------------------------------------------- observations
@@ -960,11 +922,11 @@ statusline() {
 
     # Two status line programs that each wrap the other would call each other
     # on every refresh; the inner call stops here instead
-    if [[ -n "${CLAUDE_PLUS_IN_STATUSLINE:-}" ]]; then
+    if [[ -n "${FLUID_IN_STATUSLINE:-}" ]]; then
         cat >/dev/null
         return 0
     fi
-    export CLAUDE_PLUS_IN_STATUSLINE=1
+    export FLUID_IN_STATUSLINE=1
 
     input="$(cat)"
     printf '%s' "$input" | "$SELF" observe "$id" >/dev/null 2>&1 || true
@@ -1041,7 +1003,7 @@ do_warmup() {
         log "[$id] Model '$model' is gone; falling back to the agent's own default"
         pset "$id" warmup_model "-"
         notify "model-changed" \
-            "$(provider_call "$id" label) no longer knows the model Claude Plus warmed up with ($model), so it has switched to the agent's default. Pick another with: claude-plus.sh model $id <name>" || true
+            "$(provider_call "$id" label) no longer knows the model Fluid warmed up with ($model), so it has switched to the agent's default. Pick another with: fluid.sh model $id <name>" || true
 
         output="$(provider_call "$id" warmup "")"
         rc=$?
@@ -1051,7 +1013,7 @@ do_warmup() {
         pset "$id" last_success "$started"
         pset "$id" failure_count 0
         rm -f "$dir/auth_required"
-        notify_recovered "$dir" "Claude Plus is back to normal for $(provider_call "$id" label); windows are opening again." auth failing
+        notify_recovered "$dir" "Fluid is back to normal for $(provider_call "$id" label); windows are opening again." auth failing
 
         log "[$id] Warmup succeeded output=$(printf '%s' "$output" | tr '\n' ' ' | cut -c1-200)"
 
@@ -1071,7 +1033,7 @@ do_warmup() {
         # too before this is worth a message. The first one is only logged.
         if [[ -n "$seen" ]]; then
             notify_once "$dir" auth "auth-required" \
-                "$(provider_call "$id" label) is no longer authenticated, so Claude Plus has stopped opening windows for it. Sign in again."
+                "$(provider_call "$id" label) is no longer authenticated, so Fluid has stopped opening windows for it. Sign in again."
         fi
 
         # Leave room to recover on its own if the failure was temporary
@@ -1098,7 +1060,7 @@ do_warmup() {
     # Three failures means the backoff has stretched to minutes; worth a word
     if (( failures >= 3 )); then
         notify_once "$dir" failing "warmup-failing" \
-            "Claude Plus has failed $failures warmups in a row for $(provider_call "$id" label), and is retrying every ${delay}s. See ~/.claude/claude-plus/claude-plus.log"
+            "Fluid has failed $failures warmups in a row for $(provider_call "$id" label), and is retrying every ${delay}s. See ~/.fluid/fluid.log"
     fi
 
     arm_job "$id" "$((now + delay))" "warmup-retry"
@@ -1133,7 +1095,7 @@ scheduled() {
 
     # atd ran us, so whatever stall was reported is over
     pset "$id" last_run "$(date +%s)"
-    notify_recovered "$STATE" "Claude Plus's scheduled runs are happening again." stalled
+    notify_recovered "$STATE" "Fluid's scheduled runs are happening again." stalled
 
     # A provider that cannot push its limits gets read now, so the decision
     # below and the next estimate start from something current
@@ -1149,7 +1111,7 @@ scheduled() {
 # was cancelled by a stray key, or never started. A provider with `resume`
 # reports a session that stopped on a limit (its `stuck` function reads the
 # session's transcript), and if that session is still stopped RESUME_GRACE
-# seconds after the reset, Claude Plus types `continue` into its tmux pane.
+# seconds after the reset, Fluid types `continue` into its tmux pane.
 
 # When a process started, in clock ticks since boot. Together with the pid it
 # names one process, even once the pid has been reused.
@@ -1292,7 +1254,7 @@ resume() {
         if (( attempts >= 2 )); then
             log "[$id] Session $session is still stopped after $attempts tries; giving up"
             notify "resume-failed" \
-                "$(provider_call "$id" label) did not continue the session in tmux pane $pane after its usage limit reset, and neither did Claude Plus. It is waiting for you." || true
+                "$(provider_call "$id" label) did not continue the session in tmux pane $pane after its usage limit reset, and neither did Fluid. It is waiting for you." || true
             rm -f "$file"
             continue
         fi
@@ -1498,7 +1460,7 @@ notify_test() {
 
     # Run it in the open so the user sees why it failed
     CP_EVENT="test" \
-    CP_MESSAGE="Test notification from Claude Plus." \
+    CP_MESSAGE="Test notification from Fluid." \
     CP_HOST="$(uname -n)" \
         "$NOTIFY"
 
@@ -1566,7 +1528,7 @@ case "${1:-}" in
         exit 2
         ;;
 esac
-CLAUDE_PLUS
+FLUID_SCRIPT
 
 chmod +x "$BIN"
 
@@ -1738,7 +1700,7 @@ for _provider in "$PROVIDERS"/*.sh; do
 done
 
 # Removal above has already taken out every entry of ours; a status line
-# wrapper is all Claude Plus adds, and inside another program's chain not even
+# wrapper is all Fluid adds, and inside another program's chain not even
 # that. Each agent gets its own id on the command, so the wrapper knows whose
 # reading it is handling.
 for _id in $(wrapped_agents); do
@@ -1766,7 +1728,7 @@ unset _id _file
 # Claude Code reports a turn that stopped on a usage limit, which is what the
 # resume backstop needs. Added whether or not its status line is ours, unless
 # the Claude Code plugin is installing us: it carries that hook itself.
-if command -v claude >/dev/null 2>&1 && [[ "${CLAUDE_PLUS_HOOK:-}" != plugin ]]; then
+if command -v claude >/dev/null 2>&1 && [[ "${FLUID_HOOK:-}" != plugin ]]; then
     _file="$(agent_settings claude)"
     TMP_SETTINGS="$(mktemp)"
 
@@ -1793,13 +1755,13 @@ SCHEDULER_RC=0
 "$BIN" scheduler-check || SCHEDULER_RC=$?
 
 echo
-echo "Claude Plus installed."
+echo "Fluid installed."
 if (( SCHEDULER_RC == 1 )); then
-    echo "Warning: atd is not running, so nothing Claude Plus schedules will run." >&2
+    echo "Warning: atd is not running, so nothing Fluid schedules will run." >&2
     echo "         Start it with: sudo systemctl enable --now atd" >&2
 fi
 if [[ -n "$CHAINED" ]]; then
-    echo "A status line belonging to another program already calls Claude Plus; it was left as it is:"
+    echo "A status line belonging to another program already calls Fluid; it was left as it is:"
     printf '%s' "$CHAIN_COMMANDS" | sed 's/^/  /'
 fi
 echo "Agents          : $("$BIN" providers | awk '/installed/ {printf "%s ", $1}')"

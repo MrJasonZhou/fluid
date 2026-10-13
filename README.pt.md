@@ -1,4 +1,4 @@
-# Claude Plus
+# Fluid
 
 [English](README.md) | [Deutsch](README.de.md) | [Français](README.fr.md) | [Italiano](README.it.md) | Português | [العربية](README.ar.md) | [简体中文](README.zh-CN.md) | [繁體中文](README.zh-TW.md) | [日本語](README.ja.md)
 
@@ -7,11 +7,11 @@ Duas coisas que o seu agente de código não faz por você, resolvidas enquanto 
 - **Janela sempre aberta** — uma nova janela de uso é aberta assim que a anterior é reiniciada, mesmo sem ninguém trabalhando, então quando você volta já há uma cota cheia em andamento.
 - **Aviso** — quando isso deixa de funcionar, ele avisa: Bark, ntfy, e-mail, ou qualquer outro canal que você queira ligar.
 
-Retomar uma sessão depois de um limite de uso é algo que os agentes agora fazem sozinhos; quando isso não acontece, o Claude Plus faz por eles (veja Retomada abaixo).
+Retomar uma sessão depois de um limite de uso é algo que os agentes agora fazem sozinhos; quando isso não acontece, o Fluid faz por eles (veja Retomada abaixo).
 
 ## Agentes
 
-Claude Code, Codex e Antigravity medem uma assinatura do mesmo jeito: uma janela curta que começa no seu primeiro pedido, e uma mais longa por cima. O Claude Plus mantém aqueles que você tiver instalado.
+Claude Code, Codex e Antigravity medem uma assinatura do mesmo jeito: uma janela curta que começa no seu primeiro pedido, e uma mais longa por cima. O Fluid mantém aqueles que você tiver instalado.
 
 | Agente | De onde vêm os limites | Mudanças na configuração dele |
 |---|---|---|
@@ -27,7 +27,7 @@ Cada agente tem a própria janela, o próprio agendamento e os próprios avisos;
 
 **Um dia de trabalho cabe mais janelas quando elas começam cedo.** Comece às 9h e as janelas vão das 9h às 14h e das 14h às 19h: duas até você encerrar o dia. Se em vez disso uma tivesse aberto às 6h, o dia seria coberto por 6h-11h, 11h-16h e 16h-21h — três, nas mesmas horas de trabalho. É para isso que serve o horário fixo, mais abaixo.
 
-**Saber quando ele parou de ajudar.** Manter janelas abertas só funciona enquanto um login for válido e o agendador estiver rodando; se um dos dois parar, nada acontece. O Claude Plus percebe qualquer um dos casos e avisa, em vez de falhar em silêncio o fim de semana inteiro.
+**Saber quando ele parou de ajudar.** Manter janelas abertas só funciona enquanto um login for válido e o agendador estiver rodando; se um dos dois parar, nada acontece. O Fluid percebe qualquer um dos casos e avisa, em vez de falhar em silêncio o fim de semana inteiro.
 
 ## Requisitos
 
@@ -40,25 +40,25 @@ sudo systemctl enable --now atd
 ## Instalação
 
 ```bash
-npx @claude-plus/claude-plus
+npx fluid-agents
 ```
 
 Ou a partir de um clone:
 
 ```bash
-git clone https://github.com/MrJasonZhou/claude-plus.git
-cd claude-plus
-bash install-claude-plus.sh
+git clone https://github.com/MrJasonZhou/fluid.git
+cd fluid
+bash install-fluid.sh
 ```
 
 Ou como plugin do Claude Code, cujo instalador você roda depois de dentro do próprio Claude Code:
 
 ```
-/plugin install fluid --marketplace MrJasonZhou/claude-plus
+/plugin install fluid --marketplace MrJasonZhou/fluid
 /fluid:install
 ```
 
-O plugin se chama `fluid`, porque nomes de plugin não podem começar com `claude-`. Ele já traz o hook da Retomada, então o instalador não o põe nas suas configurações, e adiciona `/fluid:status`, `/fluid:anchor` e `/fluid:uninstall`.
+Ele já traz o hook da Retomada, então o instalador não o põe nas suas configurações, e adiciona `/fluid:status`, `/fluid:anchor` e `/fluid:uninstall`.
 
 Para cada agente que tem status line, o instalador envolve a que você já tinha, que continua aparecendo exatamente como antes; é, junto com um hook para o Claude Code (veja Retomada), a única mudança nas configurações daquele agente, e todo arquivo de configuração é salvo antes. O Codex não precisa de configuração alguma. Rodar o instalador de novo é uma atualização limpa, não uma segunda cópia, e preserva para cada agente a próxima execução agendada, o estado dela e o seu notificador.
 
@@ -67,9 +67,9 @@ Para cada agente que tem status line, o instalador envolve a que você já tinha
 No dia a dia não há nada para executar — ele trabalha sozinho. Quando quiser olhar:
 
 ```bash
-~/.claude/claude-plus/claude-plus.sh status    # por agente: janela, agendamento, falhas
-~/.claude/claude-plus/claude-plus.sh providers # quais agentes estão instalados
-tail -f ~/.claude/claude-plus/claude-plus.log  # o que ele andou fazendo
+~/.fluid/fluid.sh status    # por agente: janela, agendamento, falhas
+~/.fluid/fluid.sh providers # quais agentes estão instalados
+tail -f ~/.fluid/fluid.log  # o que ele andou fazendo
 ```
 
 ## Abrir em um horário fixo
@@ -77,32 +77,32 @@ tail -f ~/.claude/claude-plus/claude-plus.log  # o que ele andou fazendo
 Por padrão, uma janela abre assim que a anterior é reiniciada, então a cadeia segue o horário em que você esgotou a cota da última vez. Para fixá-la em um horário do dia:
 
 ```bash
-~/.claude/claude-plus/claude-plus.sh anchor 06:00   # abrir às 06h
-~/.claude/claude-plus/claude-plus.sh anchor         # mostrar a configuração
-~/.claude/claude-plus/claude-plus.sh anchor off     # voltar a abrir assim que possível
+~/.fluid/fluid.sh anchor 06:00   # abrir às 06h
+~/.fluid/fluid.sh anchor         # mostrar a configuração
+~/.fluid/fluid.sh anchor off     # voltar a abrir assim que possível
 ```
 
 Uma janela que passaria por cima desse horário espera por ele: a prevista para 03h cobriria 03h-08h e engoliria as 06h, então ela abre às 06h. As horas antes ficam sem janela — se você trabalhar nesse período, seu próprio primeiro pedido abre uma normalmente. A configuração vale para todos os agentes.
 
 ## O modelo usado no warm-up
 
-Abrir uma janela custa um pedido, então o Claude Plus o mantém o menor possível: o modelo mais barato do agente, sem ferramentas e sem escrever nada no histórico. Modelos vêm e vão, e quando um agente deixa de conhecer o que está em uso ele avisa claramente — o Claude Plus passa então para o modelo padrão do próprio agente e conta isso a você uma vez, em vez de falhar janela após janela até alguém ler o log.
+Abrir uma janela custa um pedido, então o Fluid o mantém o menor possível: o modelo mais barato do agente, sem ferramentas e sem escrever nada no histórico. Modelos vêm e vão, e quando um agente deixa de conhecer o que está em uso ele avisa claramente — o Fluid passa então para o modelo padrão do próprio agente e conta isso a você uma vez, em vez de falhar janela após janela até alguém ler o log.
 
 ```bash
-~/.claude/claude-plus/claude-plus.sh model                 # com que cada agente é aquecido
-~/.claude/claude-plus/claude-plus.sh model claude sonnet   # escolher um você mesmo
-~/.claude/claude-plus/claude-plus.sh model claude auto     # voltar ao mais barato
+~/.fluid/fluid.sh model                 # com que cada agente é aquecido
+~/.fluid/fluid.sh model claude sonnet   # escolher um você mesmo
+~/.fluid/fluid.sh model claude auto     # voltar ao mais barato
 ```
 
 ## Retomada
 
-O Claude Code retoma uma sessão sozinho quando um limite de uso é zerado ("Continue automatically at usage limit" em `/config`). Às vezes isso não acontece — uma tecla apertada sem querer cancelou a contagem regressiva, ou ela nunca começou — e a sessão fica parada até você perceber. O Claude Plus é a rede de segurança: anota cada sessão que para num limite e, três minutos depois de zerar, olha de novo. Se ela ainda estiver parada, digita `continue` no pane tmux dela.
+O Claude Code retoma uma sessão sozinho quando um limite de uso é zerado ("Continue automatically at usage limit" em `/config`). Às vezes isso não acontece — uma tecla apertada sem querer cancelou a contagem regressiva, ou ela nunca começou — e a sessão fica parada até você perceber. O Fluid é a rede de segurança: anota cada sessão que para num limite e, três minutos depois de zerar, olha de novo. Se ela ainda estiver parada, digita `continue` no pane tmux dela.
 
 Fora isso, não se mete. Nada é digitado se o Claude Code ou você já continuaram, se você cancelou a contagem com Esc, ou se o pane agora roda outra coisa; tenta no máximo duas vezes e depois avisa você. Uma sessão fora do tmux não tem onde receber texto, então só fica registrada no log.
 
 ## Avisos
 
-O Claude Plus fica quieto enquanto nada precisa de você, e informa seis coisas:
+O Fluid fica quieto enquanto nada precisa de você, e informa seis coisas:
 
 | | |
 |---|---|
@@ -113,45 +113,45 @@ O Claude Plus fica quieto enquanto nada precisa de você, e informa seis coisas:
 | **Modelo de warm-up sumiu** | O modelo com que um agente era aquecido não existe mais, então a partir de agora usa-se o padrão dele |
 | **Não retomada** | Uma sessão continuava parada depois que o limite de uso zerou, e digitar `continue` também não a fez andar |
 
-Cada um é anunciado uma única vez por agente, não a cada nova tentativa: um problema durante a noite custa uma só mensagem. Uma falha que se resolve sozinha não custa nenhuma: que um agente está desconectado só é avisado depois que uma tentativa posterior também falha. Os limites de uso em si nunca são anunciados: são rotina, e os agentes, ou o Claude Plus por trás deles, retomam depois deles.
+Cada um é anunciado uma única vez por agente, não a cada nova tentativa: um problema durante a noite custa uma só mensagem. Uma falha que se resolve sozinha não custa nenhuma: que um agente está desconectado só é avisado depois que uma tentativa posterior também falha. Os limites de uso em si nunca são anunciados: são rotina, e os agentes, ou o Fluid por trás deles, retomam depois deles.
 
 Para escolher como receber o aviso, copie um dos exemplos e preencha sua chave ou servidor:
 
 ```bash
-cd ~/.claude/claude-plus
+cd ~/.fluid
 cp notify/bark.sh.sample notify.sh      # ou ntfy.sh.sample, email.sh.sample
 chmod +x notify.sh                      # use 700 no de e-mail, ele guarda uma senha
 $EDITOR notify.sh
-./claude-plus.sh notify-test            # confirme que chega até você
+./fluid.sh notify-test            # confirme que chega até você
 ```
 
 O notificador é apenas um executável que recebe `CP_EVENT`, `CP_MESSAGE` e `CP_HOST`, então Telegram, Slack, um webhook ou `mail` são questão de reescrever uma linha. Sua cópia sobrevive a reinstalações.
 
 ## Arquivos
 
-Está tudo em `~/.claude/claude-plus/`:
+Está tudo em `~/.fluid/`:
 
 | | |
 |---|---|
-| `claude-plus.sh` | O script em si |
+| `fluid.sh` | O script em si |
 | `providers/` | Um arquivo por agente |
 | `state/<agente>/` | Janela, agendamento e estado dos avisos daquele agente |
 | `notify.sh` | Seu notificador, depois de configurado |
 | `notify/` | Exemplos para copiar |
 | `anchor` | O horário em que as janelas abrem, se você definir um |
-| `claude-plus.log` | O que ele andou fazendo |
+| `fluid.log` | O que ele andou fazendo |
 
 ## Desinstalação
 
 ```bash
-npx @claude-plus/claude-plus uninstall
+npx fluid-agents uninstall
 ```
 
-Ou a partir de um clone: `bash install-claude-plus.sh uninstall`.
+Ou a partir de um clone: `bash install-fluid.sh uninstall`.
 
-Ela edita as configurações de cada agente no próprio lugar e retira apenas o que o Claude Plus adicionou: sua status line volta, e todas as outras configurações ficam exatamente como estão — inclusive as adicionadas depois da instalação. As tarefas agendadas são canceladas e `~/.claude/claude-plus/` é apagado, junto com o seu `notify.sh`. Rodar de novo não causa nenhum dano.
+Ela edita as configurações de cada agente no próprio lugar e retira apenas o que o Fluid adicionou: sua status line volta, e todas as outras configurações ficam exatamente como estão — inclusive as adicionadas depois da instalação. As tarefas agendadas são canceladas e `~/.fluid/` é apagado, junto com o seu `notify.sh`. Rodar de novo não causa nenhum dano.
 
-Se depois outro programa envolveu alguma status line por fora do Claude Plus, desinstalar não o quebra. Fica para trás um pequeno script de repasse para que esse programa continue funcionando, e o desinstalador avisa; rode de novo quando nada mais precisar dele. Uma atualização na mesma situação permanece dentro da cadeia desse programa em vez de envolvê-lo por sua vez.
+Se depois outro programa envolveu alguma status line por fora do Fluid, desinstalar não o quebra. Fica para trás um pequeno script de repasse para que esse programa continue funcionando, e o desinstalador avisa; rode de novo quando nada mais precisar dele. Uma atualização na mesma situação permanece dentro da cadeia desse programa em vez de envolvê-lo por sua vez.
 
 Uma cópia de cada arquivo de configuração de logo antes da desinstalação fica ao lado dele, assim como as cópias feitas na instalação, caso você precise voltar atrás à mão.
 

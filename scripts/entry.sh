@@ -1,25 +1,25 @@
 #!/usr/bin/env bash
-# Claude Plus - the fluid plugin's one entry point. Its commands and its
+# Fluid - the fluid plugin's one entry point. Its commands and its
 # hook call this file and nothing else; it hands over to the installer that
-# ships beside it, or to the script that installer put in ~/.claude/claude-plus.
+# ships beside it, or to the script that installer put in ~/.fluid.
 set -u
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-cp="$HOME/.claude/claude-plus/claude-plus.sh"
+cp="$HOME/.fluid/fluid.sh"
 
 installed() {
     [[ -x "$cp" ]] && return 0
-    echo "Claude Plus is not installed. Run /fluid:install"
+    echo "Fluid is not installed. Run /fluid:install"
     return 1
 }
 
 case "${1:-}" in
     install)
         # The plugin carries the StopFailure hook, so settings.json does not need it too
-        CLAUDE_PLUS_HOOK=plugin exec bash "$root/install-claude-plus.sh" install
+        FLUID_HOOK=plugin exec bash "$root/install-fluid.sh" install
         ;;
     uninstall)
-        exec bash "$root/install-claude-plus.sh" uninstall
+        exec bash "$root/install-fluid.sh" uninstall
         ;;
     status)
         installed && exec "$cp" status
@@ -33,7 +33,7 @@ case "${1:-}" in
         installed && exec "$cp" anchor ${2:+"$2"}
         ;;
     rate-limit)
-        # The hook: a no-op until Claude Plus is installed
+        # The hook: a no-op until Fluid is installed
         [[ -x "$cp" ]] && exec "$cp" rate-limit claude
         cat >/dev/null
         ;;

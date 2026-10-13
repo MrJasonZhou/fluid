@@ -1,5 +1,5 @@
 {
-  "description": "Claude Plus: report a turn that stopped on a usage limit, so the resume backstop can pick the session up if Claude Code does not. Does nothing until /fluid:install has run.",
+  "description": "Fluid: report a turn that stopped on a usage limit, so the resume backstop can pick the session up if Claude Code does not. Does nothing until /fluid:install has run.",
   "hooks": {
     "StopFailure": [
       {
@@ -7,7 +7,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/fluid.sh\" rate-limit",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/entry.sh\" rate-limit",
             "timeout": 10
           }
         ]

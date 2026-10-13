@@ -1,13 +1,13 @@
 {
   "name": "fluid",
   "displayName": "Fluid",
-  "version": "4.3.2",
+  "version": "0.1.0",
   "description": "Keeps Claude Code's usage window open while you are away, resumes a session its own auto-continue missed, and alerts you when either stops working.",
   "author": {
     "name": "Jason Zhou"
   },
-  "homepage": "https://github.com/MrJasonZhou/claude-plus#readme",
-  "repository": "https://github.com/MrJasonZhou/claude-plus",
+  "homepage": "https://github.com/MrJasonZhou/fluid#readme",
+  "repository": "https://github.com/MrJasonZhou/fluid",
   "license": "GPL-3.0-or-later",
   "keywords": [
     "usage-limit",

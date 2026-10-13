@@ -1,12 +1,12 @@
 {
-  "name": "@claude-plus/claude-plus",
-  "version": "4.3.2",
-  "description": "Keeps your coding agent's usage window open while you are away, and alerts you when it cannot. Claude Code, Codex and Antigravity.",
+  "name": "fluid-agents",
+  "version": "0.1.0",
+  "description": "Keeps your coding agent's usage window open while you are away, resumes a session it failed to continue, and alerts you when either stops working. Claude Code, Codex and Antigravity. Formerly Claude Plus.",
   "bin": {
-    "claude-plus": "install-claude-plus.sh"
+    "fluid": "install-fluid.sh"
   },
   "files": [
-    "install-claude-plus.sh",
+    "install-fluid.sh",
     "notify",
     "README*.md",
     "LICENSE"
@@ -20,13 +20,13 @@
     "usage-limit",
     "statusline"
   ],
-  "homepage": "https://github.com/MrJasonZhou/claude-plus#readme",
+  "homepage": "https://github.com/MrJasonZhou/fluid#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/MrJasonZhou/claude-plus.git"
+    "url": "git+https://github.com/MrJasonZhou/fluid.git"
   },
   "bugs": {
-    "url": "https://github.com/MrJasonZhou/claude-plus/issues"
+    "url": "https://github.com/MrJasonZhou/fluid/issues"
   },
   "author": "Jason Zhou",
   "license": "GPL-3.0-or-later",

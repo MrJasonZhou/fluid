@@ -1,11 +1,11 @@
 # Providers
 
-Claude Plus keeps a usage window open and tells you when it cannot. Neither
+Fluid keeps a usage window open and tells you when it cannot. Neither
 job is specific to one coding agent: several meter a subscription the same
 way, and the parts that differ are small and well separated.
 
 A provider is one shell file under `providers/`, installed to
-`~/.claude/claude-plus/providers/<id>.sh`. It answers a handful of questions
+`~/.fluid/providers/<id>.sh`. It answers a handful of questions
 about one agent. Everything else — scheduling, the anchor, alerts, stall
 detection, install and uninstall — is shared and knows nothing about any
 particular agent.
@@ -56,7 +56,7 @@ window to keep open. Those providers declare `alert` alone, and the core never
 schedules a warmup for them.
 
 `resume` means the agent reports a turn that stopped on a usage limit (for
-Claude Code, a `StopFailure` hook calling `claude-plus.sh rate-limit <id>`)
+Claude Code, a `StopFailure` hook calling `fluid.sh rate-limit <id>`)
 and `<id>_stuck` can read a session's transcript. The agent's own automatic
 continue always goes first: the core looks again `RESUME_GRACE` seconds after
 the reset and types `continue` into the session's tmux pane only if `stuck`
@@ -85,7 +85,7 @@ takes no `--model` need not define either.
 
 Some agents run a command of your choosing on every status line refresh, and
 will hand over their limits for free. Those are **push**: the observer installs
-a hook that pipes the agent's JSON into `claude-plus.sh observe <id>`.
+a hook that pipes the agent's JSON into `fluid.sh observe <id>`.
 
 Others only write their limits to a session log. Those are **pull**: the core
 calls `<id>_pull_limits` when it needs a reading, typically just before a

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Integration tests for Claude Plus.
+# Integration tests for Fluid.
 #
 #   bash tests/run.sh
 #
@@ -11,8 +11,8 @@
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-INSTALLER="$ROOT/install-claude-plus.sh"
-MARKER="/claude-plus/claude-plus.sh"
+INSTALLER="$ROOT/install-fluid.sh"
+MARKER="/.fluid/fluid.sh"
 
 export CP_TEST
 CP_TEST="$(mktemp -d)"
@@ -179,8 +179,8 @@ new_home() {
     rm -rf "$H"
     mkdir -p "$H/.claude"
     S="$H/.claude/settings.json"
-    BASE="$H/.claude/claude-plus"
-    CP="$BASE/claude-plus.sh"
+    BASE="$H/.fluid"
+    CP="$BASE/fluid.sh"
     ORIGFILE="$BASE/state/claude/original-statusline-command"
     rm -f "$QUEUE"/* "$CP_TEST"/claude-mode "$CP_TEST"/claude-runs "$CP_TEST"/claude-args "$CP_TEST"/codex-runs "$CP_TEST"/agy-runs "$CP_TEST"/notify-*
     AGYS="$H/.gemini/antigravity-cli/settings.json"
@@ -270,15 +270,13 @@ check "the hook names the agent"   '[[ $(jq -r ".hooks.StopFailure[0].hooks[0].c
 check "renders through wrapper"    '[[ $(render) == CS ]]'
 
 jq '.env = {"FOO":"1"} | .hooks.SessionEnd += [{"hooks":[{"type":"command","command":"/opt/save"}]}]' "$S" > "$S.t" && mv "$S.t" "$S"
-# What versions before 3.0.0 also registered, to resume sessions themselves
+# Hooks of ours in any event, beside the user's own, all go on upgrade
 jq --arg cp "$CP" '
     .hooks.StopFailure += [{"matcher":"rate_limit","hooks":[{"type":"command","command":($cp + " rate-limit")}]}]
     | .hooks.UserPromptSubmit += [{"hooks":[{"type":"command","command":($cp + " prompt-submit")}]}]
     | .hooks.SessionEnd += [{"hooks":[{"type":"command","command":($cp + " session-end")}]}]
 ' "$S" > "$S.t" && mv "$S.t" "$S"
-mkdir -p "$BASE/state/pending" "$BASE/state/stale"
-echo '{"session_id":"old"}' > "$BASE/state/pending/old.json"
-echo "2026-01-01 00:00:00 an earlier line" > "$BASE/claude-plus.log"
+echo "2026-01-01 00:00:00 an earlier line" > "$BASE/fluid.log"
 make_notifier
 { echo "$CP scheduled"; head -c 1048576 /dev/zero | tr '\0' x; } > "$QUEUE/1"
 echo "/usr/local/bin/nightly" > "$QUEUE/2"
@@ -286,10 +284,9 @@ echo "/usr/local/bin/nightly" > "$QUEUE/2"
 install_cp >/dev/null
 check "upgrade: original not doubled"  '[[ $(cat "$ORIGFILE") == "$FAKES/cs" ]]'
 check "upgrade: later edits survive"   '[[ $(jq -r .env.FOO "$S") == 1 ]]'
-check "upgrade: old resume hooks gone"  '[[ $(grep -o "$MARKER" "$S" | wc -l) == 2 && $(jq -c ".hooks | keys" "$S") == "[\"PreToolUse\",\"SessionEnd\",\"StopFailure\",\"UserPromptSubmit\"]" && $(jq ".hooks.StopFailure | length" "$S") == 1 ]]'
+check "upgrade: stray hooks of ours gone"  '[[ $(grep -o "$MARKER" "$S" | wc -l) == 2 && $(jq -c ".hooks | keys" "$S") == "[\"PreToolUse\",\"SessionEnd\",\"StopFailure\",\"UserPromptSubmit\"]" && $(jq ".hooks.StopFailure | length" "$S") == 1 ]]'
 check "upgrade: user hooks in those events kept" '[[ $(jq -r ".hooks.UserPromptSubmit[0].hooks[0].command, .hooks.SessionEnd[0].hooks[0].command" "$S" | tr "\n" " ") == "/opt/audit /opt/save " ]]'
-check "upgrade: old resume queue removed"  '[[ ! -e "$BASE/state/pending" && ! -e "$BASE/state/stale" ]]'
-check "upgrade: log kept"              'grep -q "an earlier line" "$BASE/claude-plus.log"'
+check "upgrade: log kept"              'grep -q "an earlier line" "$BASE/fluid.log"'
 check "upgrade: notifier survives"     '[[ -x "$BASE/notify.sh" ]]'
 check "upgrade: big job of ours gone"  '[[ ! -e "$QUEUE/1" ]]'
 check "upgrade: foreign job kept"      '[[ -e "$QUEUE/2" ]]'
@@ -302,7 +299,7 @@ check "uninstall: other hooks intact"  '[[ $(jq -c "[.hooks[][] .hooks[] .comman
 check "uninstall: later edits survive" '[[ $(jq -r .env.FOO "$S") == 1 && $(jq -r .model "$S") == opus ]]'
 check "uninstall: directory gone"      '[[ ! -e "$BASE" ]]'
 check "uninstall: no jobs of ours"     '[[ $(our_jobs) == 0 && -e "$QUEUE/2" ]]'
-check "uninstall: backup made"         'compgen -G "$S.claude-plus-uninstall-backup.*" >/dev/null'
+check "uninstall: backup made"         'compgen -G "$S.fluid-uninstall-backup.*" >/dev/null'
 
 before="$(md5sum < "$S")"
 out="$(install_cp uninstall)"
@@ -337,7 +334,7 @@ strip() {
 norm() {
     jq -cS . <<< "$1"
 }
-W="/h/.claude/claude-plus/claude-plus.sh"
+W="/h/.fluid/fluid.sh"
 
 check "never restores our own wrapper" \
     '[[ $(strip "{\"statusLine\":{\"command\":\"$W statusline\"}}" "$W statusline") == "{}" ]]'
@@ -488,7 +485,7 @@ install_cp uninstall >/dev/null
 check "uninstall: state removed"   '[[ ! -e "$BASE" && $(our_jobs) == 0 ]]'
 
 check "generated script never turns errexit on" \
-    '! sed -n "/^cat > \"\$BIN\" <<.CLAUDE_PLUS.\$/,/^CLAUDE_PLUS\$/p" "$INSTALLER" | grep -qE "^\s*set -e"'
+    '! sed -n "/^cat > \"\$BIN\" <<.FLUID_SCRIPT.\$/,/^FLUID_SCRIPT\$/p" "$INSTALLER" | grep -qE "^\s*set -e"'
 
 # ======================================================================
 section "alerts are marked sent only once delivered"
@@ -689,34 +686,7 @@ check "warmed up with its own command"  'grep -q -- "-p Reply only OK." "$CP_TES
 out="$(install_cp uninstall)"
 check "its status line restored"        '[[ $(jq -r .statusLine.command "$AGYS") == "$FAKES/cs" ]]'
 check "claude status line restored"     '[[ $(jq -r .statusLine.command "$S") == "$FAKES/cs" ]]'
-check "both settings backed up"         '[[ $(compgen -G "$AGYS.claude-plus-uninstall-backup.*" | wc -l) == 1 ]]'
-
-# ======================================================================
-section "state from before 4.0.0 moves under its agent"
-
-new_home migrate
-with_cs
-install_cp >/dev/null
-# Put things back where a 3.x install kept them
-rm -rf "$BASE/state/claude"
-mv "$BASE/state/claude" "$BASE/x" 2>/dev/null
-printf '%s\n' "$FAKES/cs" > "$BASE/original-statusline-command"
-echo 12345        > "$BASE/state/at_target"
-echo anchor-hold  > "$BASE/state/at_reason"
-echo 7            > "$BASE/state/failure_count"
-echo 1790000000   > "$BASE/state/five_hour_reset"
-echo 42           > "$BASE/state/five_hour_pct"
-echo 1790500000   > "$BASE/state/seven_day_reset"
-echo 13           > "$BASE/state/seven_day_pct"
-: > "$BASE/state/notified-auth"
-
-install_cp >/dev/null
-check "short window moved and renamed" '[[ $(cat "$BASE/state/claude/resets_at") == 1790000000 && $(cat "$BASE/state/claude/used_percent") == 42 ]]'
-check "long window moved and renamed"  '[[ $(cat "$BASE/state/claude/long_resets_at") == 1790500000 && $(cat "$BASE/state/claude/long_used_percent") == 13 ]]'
-check "failure count moved"            '[[ $(cat "$BASE/state/claude/failure_count") == 7 ]]'
-check "alert flag moved"               '[[ -e "$BASE/state/claude/notified-auth" ]]'
-check "wrapped command moved"          '[[ $(cat "$ORIGFILE") == "$FAKES/cs" && ! -e "$BASE/original-statusline-command" ]]'
-check "nothing left flat"              '[[ ! -e "$BASE/state/at_target" && ! -e "$BASE/state/five_hour_reset" ]]'
+check "both settings backed up"         '[[ $(compgen -G "$AGYS.fluid-uninstall-backup.*" | wc -l) == 1 ]]'
 
 # ======================================================================
 section "anchor arithmetic, on fixed dates"
@@ -725,7 +695,7 @@ section "anchor arithmetic, on fixed dates"
 # sourcing it would overwrite BASE and friends.
 anchor_cases() {
     local lib="$CP_TEST/lib.sh"
-    sed -n "/^cat > \"\$BIN\" <<'CLAUDE_PLUS'$/,/^CLAUDE_PLUS$/p" "$INSTALLER" |
+    sed -n "/^cat > \"\$BIN\" <<'FLUID_SCRIPT'$/,/^FLUID_SCRIPT$/p" "$INSTALLER" |
         sed '1d;$d' | sed '/^case "\${1:-}" in$/,$d' > "$lib"
     HOME="$CP_TEST/home-fn"
     mkdir -p "$HOME"
@@ -954,16 +924,16 @@ plugin_hook() {
 plugin_hook; rc=$?
 check "hook before install: quiet no-op" '[[ $rc == 0 && ! -e "$BASE" ]]'
 
-check "status before install says so" '[[ $(in_home "$ROOT/scripts/fluid.sh" status) == *"/fluid:install"* ]]'
-in_home "$ROOT/scripts/fluid.sh" install >/dev/null
+check "status before install says so" '[[ $(in_home "$ROOT/scripts/entry.sh" status) == *"/fluid:install"* ]]'
+in_home "$ROOT/scripts/entry.sh" install >/dev/null
 check "plugin install: status line wrapped" '[[ $(jq -r .statusLine.command "$S") == "$CP statusline claude" ]]'
 check "plugin install: no hook in settings" '! jq -e .hooks.StopFailure "$S" >/dev/null'
 
 echo "$$" > "$CP_TEST/tmux-pane-pid"
 plugin_hook
-in_home "$ROOT/scripts/fluid.sh" anchor '07:00;touch x' >/dev/null; rc=$?
+in_home "$ROOT/scripts/entry.sh" anchor '07:00;touch x' >/dev/null; rc=$?
 check "anchor refuses anything but HH:MM|off" '[[ $rc == 2 && ! -e "$BASE/anchor" ]]'
-in_home "$ROOT/scripts/fluid.sh" anchor 07:30 >/dev/null
+in_home "$ROOT/scripts/entry.sh" anchor 07:30 >/dev/null
 check "anchor takes a time"              '[[ $(cat "$BASE/anchor") == 07:30 ]]'
 check "the plugin hook records the session" '[[ $(jq -r .pane "$BASE/state/claude/pending/p1.json") == %7 ]]'
 install_cp uninstall >/dev/null

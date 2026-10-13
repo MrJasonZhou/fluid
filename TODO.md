@@ -7,8 +7,10 @@ Antigravity, 4.1.0 made the warmup model replaceable, and 4.1.1 stopped a
 refresh that fixes itself from being reported as a signed-out agent, 4.2.0
 brought Resume back as a backstop behind the agent's own continue, and 4.3.0
 packaged it as a Claude Code plugin named `fluid` (`tailwind` before 4.3.2,
-which came too close to other listings); nothing else has been
-started. Code is referred to by
+which came too close to other listings), and the whole project was then renamed
+from Claude Plus to Fluid, starting over at 0.1.0 (repository, npm package `fluid-agents`, and
+`~/.fluid` in place of `~/.claude/claude-plus`, with no migration); nothing
+else has been started. Code is referred to by
 function name rather than line number, since lines move.
 
 ## Features
@@ -43,7 +45,7 @@ generated script would close this.
   one weekly pool and no short window, so neither has a window worth keeping.
   Both would still earn `alert` if anyone wants the auth and scheduler
   warnings for them.
-- `claude-plus.log` is never pruned. It grows slowly.
+- `fluid.log` is never pruned. It grows slowly.
 
 ### Decided against
 
@@ -56,7 +58,7 @@ generated script would close this.
   way. Both `continue` prompts in the transcript carry
   `origin: {kind: "human"}` and `promptSource: "typed"`, and arrived when atd
   ran the job at the top of the minute (0.26 s and 10 s after the reset), so
-  Claude Plus's tmux keystrokes went first each time. On the second, the user
+  Fluid's tmux keystrokes went first each time. On the second, the user
   had pressed Esc - the transcript records `Automatic continue cancelled` - and
   Resume continued anyway.
   What the native feature does not cover (weekly limits more than a day out,
@@ -94,7 +96,7 @@ generated script would close this.
   an output carrying `unrecognized_model`, which is not matched by the
   expired-login pattern, so it can be told apart: the warmup is retried with
   no model at all, the fallback is remembered per agent, and one alert names
-  the model. `claude-plus.sh model <agent> <name>` overrides it by hand.
+  the model. `fluid.sh model <agent> <name>` overrides it by hand.
 - **A watchdog independent of `at`.** The scheduler check runs on status line
   refreshes, so a scheduler that stops overnight is only noticed the next time
   Claude Code starts. Catching it sooner would take cron or a systemd timer,
@@ -115,7 +117,7 @@ generated script would close this.
 
 ### WSL
 
-If Claude Code runs inside WSL, Claude Plus already works: it is Linux. Two
+If Claude Code runs inside WSL, Fluid already works: it is Linux. Two
 things to verify and document:
 - WSL shuts its VM down when idle. With no terminal open, the VM may be gone
   when an `at` job is due, and the job does not run. The scheduler check would

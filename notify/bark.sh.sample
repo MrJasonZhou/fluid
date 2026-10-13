@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-# Bark (iOS) notifier for Claude Plus.
+# Bark (iOS) notifier for Fluid.
 #
 # Install it, then put your own device key below:
 #
-#   cp ~/.claude/claude-plus/notify/bark.sh.sample ~/.claude/claude-plus/notify.sh
-#   chmod +x ~/.claude/claude-plus/notify.sh
-#   ~/.claude/claude-plus/claude-plus.sh notify-test
+#   cp ~/.fluid/notify/bark.sh.sample ~/.fluid/notify.sh
+#   chmod +x ~/.fluid/notify.sh
+#   ~/.fluid/fluid.sh notify-test
 #
-# Claude Plus runs this script with CP_EVENT, CP_MESSAGE and CP_HOST set.
+# Fluid runs this script with CP_EVENT, CP_MESSAGE and CP_HOST set.
 
 set -u
 
@@ -16,7 +16,7 @@ BARK_SERVER="https://api.day.app"
 
 curl -fsS -o /dev/null \
     --max-time 15 \
-    --data-urlencode "title=Claude Plus on $CP_HOST" \
+    --data-urlencode "title=Fluid on $CP_HOST" \
     --data-urlencode "body=$CP_MESSAGE" \
-    --data-urlencode "group=claude-plus" \
+    --data-urlencode "group=fluid" \
     "$BARK_SERVER/$BARK_KEY"

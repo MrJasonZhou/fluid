@@ -522,7 +522,7 @@ cat > "$BIN" <<'CLAUDE_PLUS'
 # option) any later version. See the LICENSE file for details.
 set -u
 
-VERSION="4.2.0"
+VERSION="4.3.0"
 
 BASE="$HOME/.claude/claude-plus"
 STATE="$BASE/state"
@@ -1764,8 +1764,9 @@ done
 unset _id _file
 
 # Claude Code reports a turn that stopped on a usage limit, which is what the
-# resume backstop needs. Added whether or not its status line is ours.
-if command -v claude >/dev/null 2>&1; then
+# resume backstop needs. Added whether or not its status line is ours, unless
+# the Claude Code plugin is installing us: it carries that hook itself.
+if command -v claude >/dev/null 2>&1 && [[ "${CLAUDE_PLUS_HOOK:-}" != plugin ]]; then
     _file="$(agent_settings claude)"
     TMP_SETTINGS="$(mktemp)"
 

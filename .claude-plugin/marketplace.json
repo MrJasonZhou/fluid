@@ -1,0 +1,21 @@
+{
+  "name": "claude-plus",
+  "owner": {
+    "name": "Jason Zhou"
+  },
+  "metadata": {
+    "description": "Claude Plus as a Claude Code plugin.",
+    "version": "4.3.0"
+  },
+  "plugins": [
+    {
+      "name": "tailwind",
+      "description": "Keeps Claude Code's usage window open while you are away, resumes a session its own auto-continue missed, and alerts you when either stops working.",
+      "version": "4.3.0",
+      "author": {
+        "name": "Jason Zhou"
+      },
+      "source": "./"
+    }
+  ]
+}

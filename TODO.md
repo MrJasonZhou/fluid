@@ -4,9 +4,10 @@ Analysis of 2.3.1, 2026-09-17, revised since. The scheduler check listed here
 went into 2.4.0, 3.0.0 removed Resume (see Decided against), 3.1.0 added an
 anchor time after all, 4.0.0 split out the provider layer and added Codex and
 Antigravity, 4.1.0 made the warmup model replaceable, and 4.1.1 stopped a
-refresh that fixes itself from being reported as a signed-out agent, and 4.2.0
-brought Resume back as a backstop behind the agent's own continue; nothing
-else has been started. Code is referred to by
+refresh that fixes itself from being reported as a signed-out agent, 4.2.0
+brought Resume back as a backstop behind the agent's own continue, and 4.3.0
+packaged it as a Claude Code plugin named `tailwind`; nothing else has been
+started. Code is referred to by
 function name rather than line number, since lines move.
 
 ## Features

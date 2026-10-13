@@ -51,6 +51,15 @@ cd claude-plus
 bash install-claude-plus.sh
 ```
 
+Ou como plugin do Claude Code, cujo instalador você roda depois de dentro do próprio Claude Code:
+
+```
+/plugin install tailwind --marketplace MrJasonZhou/claude-plus
+/tailwind:install
+```
+
+O plugin se chama `tailwind`, porque nomes de plugin não podem começar com `claude-`. Ele já traz o hook da Retomada, então o instalador não o põe nas suas configurações, e adiciona `/tailwind:status`, `/tailwind:anchor` e `/tailwind:uninstall`.
+
 Para cada agente que tem status line, o instalador envolve a que você já tinha, que continua aparecendo exatamente como antes; é, junto com um hook para o Claude Code (veja Retomada), a única mudança nas configurações daquele agente, e todo arquivo de configuração é salvo antes. O Codex não precisa de configuração alguma. Rodar o instalador de novo é uma atualização limpa, não uma segunda cópia, e preserva para cada agente a próxima execução agendada, o estado dela e o seu notificador.
 
 ## Uso

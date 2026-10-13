@@ -51,6 +51,15 @@ cd claude-plus
 bash install-claude-plus.sh
 ```
 
+Or as a Claude Code plugin, whose installer you then run from inside Claude Code:
+
+```
+/plugin install tailwind --marketplace MrJasonZhou/claude-plus
+/tailwind:install
+```
+
+The plugin is called `tailwind`, since plugin names may not start with `claude-`. It brings the Resume hook itself, so the installer leaves that out of your settings, and adds `/tailwind:status`, `/tailwind:anchor` and `/tailwind:uninstall`.
+
 For each agent that has a status line, the installer wraps the one you already had, which keeps showing exactly as before; that, plus one hook for Claude Code (see Resume), is all it changes in that agent's settings, and every settings file is backed up first. Codex needs no configuration at all. Re-running the installer is a clean upgrade rather than a second copy, and it carries over each agent's next scheduled run, its state and your notifier.
 
 ## Usage

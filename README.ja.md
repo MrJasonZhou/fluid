@@ -51,6 +51,15 @@ cd claude-plus
 bash install-claude-plus.sh
 ```
 
+Claude Code のプラグインとして入れ、インストーラを Claude Code の中から実行することもできます。
+
+```
+/plugin install tailwind --marketplace MrJasonZhou/claude-plus
+/tailwind:install
+```
+
+プラグイン名が `tailwind` なのは、プラグイン名を `claude-` で始められないためです。「再開」用のフックはプラグイン自身が持つので、インストーラは設定に追加しません。ほかに `/tailwind:status`、`/tailwind:anchor`、`/tailwind:uninstall` が使えます。
+
 statusLine を持つエージェントごとに、インストーラは既存のものを包み込みます（表示はこれまでとまったく同じです）。そのエージェントの設定への変更はこれだけ（Claude Code には加えて「再開」用のフックが 1 つ）で、設定ファイルはどれも先にバックアップされます。Codex には設定が一切要りません。再実行は二重インストールではなくクリーンな更新になり、各エージェントの次に予約された実行とその状態、そしてあなたの通知スクリプトは引き継がれます。
 
 ## 使い方

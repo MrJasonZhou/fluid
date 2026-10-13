@@ -937,6 +937,33 @@ install_cp uninstall >/dev/null
 check "uninstall takes the hook out"     '! grep -qF "$MARKER" "$S" && [[ $(our_jobs) == 0 ]]'
 
 # ======================================================================
+section "the Claude Code plugin brings the hook and installs the rest"
+
+v="$(sed -n 's/^VERSION="\(.*\)"$/\1/p' "$INSTALLER")"
+check "one version everywhere" '[[ -n $v && $(jq -r .version "$ROOT/package.json") == "$v" && $(jq -r .version "$ROOT/.claude-plugin/plugin.json") == "$v" && $(jq -r ".metadata.version, .plugins[0].version" "$ROOT/.claude-plugin/marketplace.json" | sort -u) == "$v" ]]'
+check "marketplace names the plugin" '[[ $(jq -r .plugins[0].name "$ROOT/.claude-plugin/marketplace.json") == $(jq -r .name "$ROOT/.claude-plugin/plugin.json") ]]'
+
+HOOK="$(jq -r '.hooks.StopFailure[0].hooks[0].command' "$ROOT/hooks/hooks.json")"
+new_home plugin
+with_cs
+echo '{"type":"assistant","error":"rate_limit"}' > "$H/t.jsonl"
+plugin_hook() {
+    printf '{"session_id":"p1","transcript_path":"%s"}' "$H/t.jsonl" |
+        in_home env TMUX=/tmp/sock,1,0 TMUX_PANE=%7 bash -c "$HOOK"
+}
+plugin_hook; rc=$?
+check "hook before install: quiet no-op" '[[ $rc == 0 && ! -e "$BASE" ]]'
+
+in_home env CLAUDE_PLUS_HOOK=plugin bash "$INSTALLER" >/dev/null
+check "plugin install: status line wrapped" '[[ $(jq -r .statusLine.command "$S") == "$CP statusline claude" ]]'
+check "plugin install: no hook in settings" '! jq -e .hooks.StopFailure "$S" >/dev/null'
+
+echo "$$" > "$CP_TEST/tmux-pane-pid"
+plugin_hook
+check "the plugin hook records the session" '[[ $(jq -r .pane "$BASE/state/claude/pending/p1.json") == %7 ]]'
+install_cp uninstall >/dev/null
+
+# ======================================================================
 echo
 echo "$PASS passed, $FAIL failed"
 (( FAIL == 0 ))

@@ -1,6 +1,6 @@
 {
   "name": "@claude-plus/claude-plus",
-  "version": "4.2.0",
+  "version": "4.3.0",
   "description": "Keeps your coding agent's usage window open while you are away, and alerts you when it cannot. Claude Code, Codex and Antigravity.",
   "bin": {
     "claude-plus": "install-claude-plus.sh"

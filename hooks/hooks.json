@@ -1,0 +1,17 @@
+{
+  "description": "Claude Plus: report a turn that stopped on a usage limit, so the resume backstop can pick the session up if Claude Code does not. Does nothing until /tailwind:install has run.",
+  "hooks": {
+    "StopFailure": [
+      {
+        "matcher": "rate_limit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "s=\"$HOME/.claude/claude-plus/claude-plus.sh\"; [ -x \"$s\" ] && exec \"$s\" rate-limit claude; cat >/dev/null",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

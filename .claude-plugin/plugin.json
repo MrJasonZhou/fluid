@@ -1,6 +1,6 @@
 {
   "name": "fluid",
-  "displayName": "Claude Plus",
+  "displayName": "Fluid",
   "version": "4.3.2",
   "description": "Keeps Claude Code's usage window open while you are away, resumes a session its own auto-continue missed, and alerts you when either stops working.",
   "author": {

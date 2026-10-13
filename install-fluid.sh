@@ -503,7 +503,7 @@ cat > "$BIN" <<'FLUID_SCRIPT'
 # option) any later version. See the LICENSE file for details.
 set -u
 
-VERSION="0.1.1"
+VERSION="0.1.2"
 
 BASE="$HOME/.fluid"
 STATE="$BASE/state"

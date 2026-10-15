@@ -1348,7 +1348,17 @@ statusline() {
     export FLUID_IN_STATUSLINE=1
 
     input="$(cat)"
-    printf '%s' "$input" | "$SELF" observe "$id" >/dev/null 2>&1 || true
+    # Claude Code kills a status line still running when the next refresh
+    # comes. Killed inside `at`, observe left a half-written job that never
+    # runs and is never removed (435 of them on one machine), so it runs on
+    # its own and the status line does not wait for it.
+    # ponytail: no setsid on macOS; there it only leaves the parent's process
+    # group if Claude Code kills the whole group
+    if command -v setsid >/dev/null 2>&1; then
+        printf '%s' "$input" | setsid "$SELF" observe "$id" >/dev/null 2>&1 &
+    else
+        printf '%s' "$input" | "$SELF" observe "$id" >/dev/null 2>&1 &
+    fi
 
     orig_file="$(pstate "$id")/original-statusline-command"
 

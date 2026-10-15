@@ -889,6 +889,8 @@ rm -f "$CP_TEST/at-cwd" "$CP_TEST/at-env"
   printf '{"rate_limits":{"five_hour":{"used_percentage":10,"resets_at":%s}}}' "$(( $(date +%s) + 3600 ))" |
       in_home env TMUX=/tmp/tmux-0/default,1,0 TMUX_PANE=%3 CLAUDECODE=1 FOO_KEEP=1 \
           "$CP" statusline claude >/dev/null )
+# The status line hands the reading to observe in the background
+for i in $(seq 1 100); do [[ -s "$CP_TEST/at-env" ]] && break; sleep 0.05; done
 rm -rf "$PROJ"
 check "queued from /, not the session's directory" '[[ $(our_jobs) == 1 && $(cat "$CP_TEST/at-cwd") == / ]]'
 check "without the session's own variables"        '! grep -Eq "^(TMUX|TMUX_PANE|CLAUDECODE|FLUID_IN_STATUSLINE)=" "$CP_TEST/at-env"'

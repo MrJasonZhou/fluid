@@ -647,7 +647,7 @@ cat > "$STAGE/fluid.sh" <<'FLUID_SCRIPT'
 # option) any later version. See the LICENSE file for details.
 set -u
 
-VERSION="0.2.1"
+VERSION="0.2.3"
 
 BASE="$HOME/.fluid"
 STATE="$BASE/state"

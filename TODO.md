@@ -14,8 +14,9 @@ launchd one-shot agents instead of `at`, with stand-ins for flock, GNU
 date, timeout, tac and /proc, and 0.2.1 fixed what a review of error handling
 and of the effect on running sessions and jobs found (launchd PATH, the at
 working directory, locks held past their use, uninstall racing a run in
-progress, settings behind a symlink, and more; see the 0.2.1 commits); nothing
-else has been started. Code is referred to by
+progress, settings behind a symlink, and more; see the 0.2.1 commits), and 0.2.3
+stopped a status line killed mid-refresh from leaving half-written at jobs
+behind; nothing else has been started. Code is referred to by
 function name rather than line number, since lines move.
 
 ## Features

@@ -24,6 +24,8 @@ export const VERIFY_MS = 90_000
 export const MAX_ATTEMPTS = 2
 // 待っている間の見回りの間隔。スリープから覚めても次の見回りで追いつく
 export const TICK_MS = 30_000
+// あきらめたことを知らせられなかったとき、知らせ直すまでの間隔
+export const NOTIFY_RETRY_MS = 600_000
 // 自分が送った continue で始まったターンを、他人のものと取り違えない幅
 const OWN_TURN_MS = 10_000
 
@@ -38,6 +40,8 @@ type Pending = {
   attempts: number
   // 最後に送った時刻
   sentAt?: number
+  // continue を送っている最中。その間に始まるターンは自分のもの
+  isSending?: boolean
 }
 
 // セッションの間だけ持つ状態。モジュールが読み直されれば初めからになる
@@ -75,29 +79,37 @@ export function isLimited(limits: readonly SessionRateLimit[]): boolean {
   return limits.some(l => (l.kind === 'five_hour' || l.kind === 'seven_day') && l.percentUsed >= 99.9)
 }
 
-// 止めた窓が開く時刻（ミリ秒）。長い窓が埋まっていればそちら、なければ短い窓
+// 止めた窓が開く時刻（ミリ秒）。長い窓が埋まっていればそちら、なければ短い窓。
+// 長い窓が埋まっていて開く時刻が分からなければ、分からないと答える: 短い窓の
+// 時刻に送っても、また止まるだけ
 export function resetAt(limits: readonly SessionRateLimit[], now: number): number | undefined {
-  const at = (kind: string) => {
+  const parse = (kind: string) => {
     const limit = limits.find(l => l.kind === kind)
-    const t = limit?.resetsAt === undefined ? NaN : Date.parse(limit.resetsAt)
-    return Number.isNaN(t) || t <= now ? undefined : { t, isFull: (limit?.percentUsed ?? 0) >= 99.9 }
+    return { t: limit?.resetsAt === undefined ? NaN : Date.parse(limit.resetsAt), percent: limit?.percentUsed ?? 0 }
   }
 
-  const long = at('seven_day')
-  if (long?.isFull) return long.t
-  return at('five_hour')?.t
+  const long = parse('seven_day')
+  if (long.percent >= 99.9) {
+    if (Number.isNaN(long.t)) return undefined
+    if (long.t > now) return long.t
+  }
+  const short = parse('five_hour')
+  return Number.isNaN(short.t) || short.t <= now ? undefined : short.t
 }
 
-// fluid.sh を一度呼ぶ。入っていなければ（/fluid:install の前）何もしない
-async function fluid($: EngineInterface, args: string[], stdin?: string) {
+// fluid.sh を一度呼ぶ。入っていなければ（/fluid:install の前）何もしない。
+// うまくいったかどうかを返す
+async function fluid($: EngineInterface, args: string[], stdin?: string): Promise<boolean> {
   const home = await $.env.get('HOME')
-  if (home === undefined) return
+  if (home === undefined) return false
   try {
     // at への書き込みの途中で止めると、半端なジョブが残る（0.2.3）。待つのは
     // フックではないので、余裕を持たせる
-    await $.process.run([`${home}/.fluid/fluid.sh`, ...args], { cwd: '/', stdin, timeoutMs: 60_000 })
+    const result = await $.process.run([`${home}/.fluid/fluid.sh`, ...args], { cwd: '/', stdin, timeoutMs: 60_000 })
+    return result.exitCode === 0
   } catch {
     // 未インストール、または一時的な失敗。次の読み取りがまた届く
+    return false
   }
 }
 
@@ -142,12 +154,23 @@ async function tickOnce($: EngineInterface, state: State) {
   const now = await $.clock.now()
   if (now < pending.dueAt || state.isTurnRunning) return
 
+  // あきらめたことは、届くまで知らせ直す（通知の設定がまだ、一時的な失敗）
   if (pending.attempts >= MAX_ATTEMPTS) {
-    stopWatching(state)
-    await fluid($, ['notify', 'resume-failed',
+    const isDelivered = await fluid($, ['notify', 'resume-failed',
       `Claude Code did not continue a session after its usage limit reset, and neither did Fluid after ${pending.attempts} tries. It is waiting for you.`])
+    if (state.pending !== pending) return
+    if (isDelivered) stopWatching(state)
+    else pending.dueAt = now + NOTIFY_RETRY_MS
     return
   }
+
+  // 待っている間に /fluid:uninstall されていれば、もう送らない。入力欄を
+  // 読む前に確かめる: 読んでから送るまでの間には何も待たない
+  if (!(await isInstalled($))) {
+    stopWatching(state)
+    return
+  }
+  if (state.pending !== pending || state.isTurnRunning) return
 
   // 入力欄に書きかけがあれば、誰かがそこにいる。混ぜて送らずに任せる
   const box = await $.prompt.read()
@@ -160,18 +183,17 @@ async function tickOnce($: EngineInterface, state: State) {
   // 入力欄を読んでいる間に誰か（エージェント自身を含む）が続けていれば送らない
   if (state.pending !== pending || state.isTurnRunning) return
 
-  // 待っている間に /fluid:uninstall されていれば、もう送らない
-  if (!(await isInstalled($))) {
-    stopWatching(state)
-    return
-  }
-  if (state.pending !== pending || state.isTurnRunning) return
-
   pending.attempts += 1
-  pending.sentAt = now
-  pending.dueAt = now + VERIFY_MS
-  // 送るまでの間に何も待たない。ログは送った後で、待たずに
-  await $.prompt.submit({ text: 'continue', asUser: true })
+  pending.isSending = true
+  try {
+    await $.prompt.submit({ text: 'continue', asUser: true })
+  } finally {
+    pending.isSending = false
+  }
+  // 時刻は送った後で取る。入力欄の読み取りが長引いても、自分のターンを
+  // 他人のものと取り違えない
+  pending.sentAt = await $.clock.now()
+  pending.dueAt = pending.sentAt + VERIFY_MS
   void fluid($, ['log', 'claude', `Sent continue to the stopped session, attempt ${pending.attempts}`])
 }
 
@@ -216,6 +238,7 @@ async function turnStarted($: EngineInterface, state: State) {
   const pending = state.pending
   if (pending === undefined) return
 
+  if (pending.isSending) return
   const now = await $.clock.now()
   const isOwn = pending.sentAt !== undefined && now - pending.sentAt < OWN_TURN_MS
   if (!isOwn) stopWatching(state)

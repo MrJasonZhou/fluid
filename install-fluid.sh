@@ -1875,9 +1875,10 @@ case "${1:-}" in
     log)
         log "[${2:-}] ${3:-}"
         ;;
+    # Fails when it did not go out, so the module can try again later
     notify)
         log "Notify event=${2:-} ${3:-}"
-        notify "${2:-}" "${3:-}" || true
+        notify "${2:-}" "${3:-}"
         ;;
     version)
         echo "$VERSION"

@@ -8,7 +8,7 @@
 import { describe, expect, mock, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 import type { On, SessionRateLimit } from 'claude-code'
-import { GRACE_MS, MAX_ATTEMPTS, TICK_MS, VERIFY_MS, resetAt, toReading } from '../hooks/register'
+import { GRACE_MS, MAX_ATTEMPTS, NOTIFY_RETRY_MS, TICK_MS, VERIFY_MS, resetAt, toReading } from '../hooks/register'
 
 const T0 = Date.parse('2026-10-15T00:00:00Z')
 const BIN = '/home/u/.fluid/fluid.sh'
@@ -24,6 +24,10 @@ type World = {
   clock: ReturnType<typeof mock.clock>
   // 入力欄が読まれるたびに、答える前に呼ばれる
   onRead?: () => Promise<void>
+  // プロンプトが送られるたびに、答える前に呼ばれる
+  onSubmit?: () => Promise<void>
+  // この回数だけ、通知に失敗する
+  failNotify: number
   // ~/.fluid/fluid.sh があるか（/fluid:install の後か）
   isInstalled: boolean
 }
@@ -37,7 +41,7 @@ function limitsAt(now: number, used: number, resetInMs: number): SessionRateLimi
 
 // エンジンの下の世界。どのイベントも、ここが最後に答える
 function world(on: On, limits: SessionRateLimit[] = []): World {
-  const w: World = { runs: [], submitted: [], env: {}, limits, draft: '', isInstalled: true, clock: mock.clock(on, { now: T0 }) }
+  const w: World = { runs: [], submitted: [], env: {}, limits, draft: '', isInstalled: true, failNotify: 0, clock: mock.clock(on, { now: T0 }) }
 
   mock.env(on, { HOME: '/home/u' })
   on('env.set', (_$, e) => {
@@ -46,7 +50,9 @@ function world(on: On, limits: SessionRateLimit[] = []): World {
   })
   on('process.run', (_$, e) => {
     w.runs.push({ argv: [...e.argv], stdin: e.init?.stdin })
-    return { value: { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+    const isFailing = e.argv[1] === 'notify' && w.failNotify > 0
+    if (isFailing) w.failNotify -= 1
+    return { value: { exitCode: isFailing ? 1 : 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
   })
   on('fs.exists', (_$, e) => ({ value: e.path === BIN && w.isInstalled }))
   on('session.usage', () => ({ value: { startedAt: T0, context: { window: 200_000 }, rateLimits: w.limits } }))
@@ -54,8 +60,9 @@ function world(on: On, limits: SessionRateLimit[] = []): World {
     await w.onRead?.()
     return { value: { text: w.draft, cursor: w.draft.length } }
   })
-  on('prompt.submit', (_$, e) => {
+  on('prompt.submit', async (_$, e) => {
     w.submitted.push(e.text)
+    await w.onSubmit?.()
     return { text: e.text }
   })
 
@@ -91,6 +98,9 @@ describe('readings', () => {
     const full = limits.map(l => (l.kind === 'seven_day' ? { ...l, percentUsed: 100 } : l))
     expect(resetAt(full, T0)).toBe(T0 + 3 * 86_400_000)
     expect(resetAt([], T0)).toBe(undefined)
+    // 長い窓が埋まって開く時刻が分からない: 短い窓の時刻で送っても止まるだけ
+    const unknown = full.map(l => (l.kind === 'seven_day' ? { kind: l.kind, percentUsed: 100 } : l))
+    expect(resetAt(unknown, T0)).toBe(undefined)
   })
 
   test('session start marks the session and hands its reading to fluid.sh', async ($, on) => {
@@ -216,6 +226,46 @@ describe('resume', () => {
     expect(w.submitted.length).toBe(MAX_ATTEMPTS)
     expect(notified(w).length).toBe(1)
     expect(notified(w)[0]?.argv.slice(1, 3)).toEqual(['notify', 'resume-failed'])
+  })
+
+  test('a slow look at the box still knows the turn it started as its own', async ($, on) => {
+    const w = world(on)
+    await $.session.start({ cwd: '/work', surface: 'terminal', isInteractive: true })
+    await hitLimit($, w)
+
+    // 入力欄の読み取りが長引き、送った continue のターンはその送信の中で始まる
+    w.onRead = () => w.clock.sleep(15_000)
+    w.onSubmit = async () => {
+      await $.turn.start({ text: 'continue', turnId: `t${w.submitted.length}` })
+    }
+    for (let i = 0; i < MAX_ATTEMPTS; i++) {
+      for (let k = 0; k < 100 && w.submitted.length <= i; k++) await w.clock.advance(TICK_MS)
+      await hitLimit($, w)
+    }
+    await w.clock.advance(RESET_IN + GRACE_MS + 2 * TICK_MS)
+
+    expect(w.submitted.length).toBe(MAX_ATTEMPTS)
+    expect(notified(w).length).toBe(1)
+  })
+
+  test('says it gave up again until that goes out', async ($, on) => {
+    const w = world(on)
+    await $.session.start({ cwd: '/work', surface: 'terminal', isInteractive: true })
+    await hitLimit($, w)
+    w.failNotify = 1
+
+    for (let i = 0; i < MAX_ATTEMPTS; i++) {
+      for (let k = 0; k < 100 && w.submitted.length <= i; k++) await w.clock.advance(TICK_MS)
+      await $.turn.start({ text: 'continue', turnId: `t${i}` })
+      await hitLimit($, w)
+    }
+    await w.clock.advance(RESET_IN + GRACE_MS + TICK_MS)
+    expect(notified(w).length).toBe(1)
+
+    await w.clock.advance(NOTIFY_RETRY_MS + TICK_MS)
+    expect(notified(w).length).toBe(2)
+    await w.clock.advance(3 * NOTIFY_RETRY_MS)
+    expect(notified(w).length).toBe(2)
   })
 
   test('a turn that ended in an error with the window used up counts as a stop', async ($, on) => {

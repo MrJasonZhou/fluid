@@ -1307,11 +1307,13 @@ check "a module reading plans the next window"          '[[ $(cat "$BASE/state/c
 check "status names where the readings come from"       '[[ $(cp_run status) == *"Readings      : hooks module, last 20"* ]]'
 check "status has no tmux resume any more"              '[[ $(cp_run status) != *"Resume        :"* ]]'
 
+cp_run notify resume-failed "It is waiting for you."; rc=$?
+check "an alert with no notifier yet fails, to be sent again" '[[ $rc != 0 ]]'
 make_notifier
 cp_run log claude "Sending continue to the stopped session, attempt 1"
-cp_run notify resume-failed "It is waiting for you."
+cp_run notify resume-failed "It is waiting for you."; rc=$?
 check "the module's log lines reach the log"            'grep -q "\[claude\] Sending continue to the stopped session, attempt 1" "$BASE/fluid.log"'
-check "and its alerts the notifier"                     '[[ $(count resume-failed notify-delivered) == 1 ]]'
+check "and its alerts the notifier"                     '[[ $rc == 0 && $(count resume-failed notify-delivered) == 1 ]]'
 
 # 予約した at ジョブに、モジュールの印を持ち込まない
 rm -f "$CP_TEST/at-env"

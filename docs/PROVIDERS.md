@@ -84,8 +84,9 @@ takes no `--model` need not define either.
 ### Push and pull
 
 Some agents run a command of your choosing on every status line refresh, and
-will hand over their limits for free. Those are **push**: the observer installs
-a hook that pipes the agent's JSON into `fluid.sh observe <id>`.
+will hand over their limits for free. Those are **push**: the observer wraps
+the agent's status line, and every refresh hands its JSON to `fluid.sh observe
+<id>`, in the background so the status line never waits for it.
 
 Others only write their limits to a session log. Those are **pull**: the core
 calls `<id>_pull_limits` when it needs a reading, typically just before a
@@ -106,5 +107,6 @@ the directory.
 ## State
 
 Each provider gets `state/<id>/`, so their windows, schedules and alert flags
-never mix. One `at` job per provider. The anchor is shared, since it is about
+never mix. One queued run per provider: an `at` job, or a launchd agent on
+macOS. The anchor is shared, since it is about
 the user's day rather than any one agent.

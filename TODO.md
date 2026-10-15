@@ -50,8 +50,8 @@ generated script would close this.
 - macOS (0.2.0) is tested in CI on the system bash 3.2 with fake launchd, but
   not yet on a real Mac: a one-shot agent's behaviour across sleep, and
   `launchctl bootstrap` from an SSH session with nobody logged in, are
-  unverified.
-
+  unverified, and so is whether `claude -p` started by launchd can read the
+  login in the Keychain; if it cannot, Keep does nothing on a Mac.
 - No way to turn one agent off without uninstalling. Deleting its file under
   `providers/` works until the next upgrade rewrites it.
 - Kimi Code and Grok Build are understood but not implemented: Kimi's short
@@ -118,16 +118,20 @@ generated script would close this.
 
 ## Platforms
 
-### Current platform dependencies
+### Platform dependencies
 
-| Dependency | Used for | Uses | macOS | Windows (native) |
+0.2.0 gathered every call that assumes one system into a handful of helpers
+(`fmt_time`, `parse_time`, `with_timeout`, `reverse_lines`, `take_lock`) and
+the scheduler functions, so the rest of the script is the same everywhere.
+
+| Dependency | Used for | Linux | macOS | Windows (native) |
 |---|---|---|---|---|
-| GNU `date -d` | time conversion | 9 | BSD `date -r` instead | n/a |
-| `at` / `atq` / `atrm` | scheduling | 9 | `atrun` disabled by default; launchd is native | Task Scheduler |
-| `flock` | locking | 4 | missing | missing |
-| `timeout` | time limits | 3 | missing (`gtimeout` via coreutils) | present in Git Bash |
-| `systemctl` / `pgrep` | is atd running (optional) | 5 | `launchctl` | n/a |
-| bash >= 4.4 | empty arrays under `set -u` | 8 | system bash is 3.2 | Git Bash is 5.x |
+| `date` | time conversion | GNU `date -d` | BSD `date -r` / `-j -f` | n/a |
+| scheduler | queued runs | `at` / `atq` / `atrm` | one-shot launchd agents | Task Scheduler |
+| `flock` | locking | `flock` | a directory lock with the holder's pid | missing |
+| `timeout` | time limits | `timeout` | `gtimeout`, or perl `alarm` | present in Git Bash |
+| `tac` | reading logs backwards | `tac` | `tail -r` | n/a |
+| bash | the script itself | any | system bash 3.2, kept clean for it | Git Bash is 5.x |
 
 ### WSL
 
@@ -143,18 +147,10 @@ Expected work: testing on a real machine and documentation; little or no code.
 
 ### macOS
 
-Both features look feasible, and with Resume gone the tmux and `/proc`
-dependencies are gone too. Needed:
-- The platform layer below, with Linux and macOS implementations.
-- bash 3.2 compatibility, or a requirement for Homebrew bash.
-- Scheduling through launchd.
-
-Two things must be verified first; if either fails, the approach does not work:
-1. Whether `claude -p` started in the background (launchd or `at`) can read the
-   login credentials in the Keychain. If not, Keep cannot run on macOS at all.
-2. What happens to a run that falls due while the lid is closed.
-
-GitHub Actions has macOS runners, so the test suite can cover it.
+Shipped in 0.2.0 and tested in CI on the system bash 3.2 without GNU
+coreutils. What is left needs a real Mac (see Low priority): the Keychain from
+launchd, a run that falls due while the lid is closed, and `launchctl
+bootstrap` from an SSH session.
 
 ### Windows (native)
 
@@ -165,16 +161,10 @@ PowerShell or Node.
 
 Recommendation: not now.
 
-### Groundwork: a platform layer
+### Packaging the runtime script
 
-Half of this is done. 4.0.0 split out the *provider* layer, which separates
-agents from the core; what is still mixed in is the *platform* layer, the
-calls that assume Linux (time formatting, scheduling, locking, timeouts,
-scheduler health). Gathering those into a handful of functions, with Linux
-behaviour identical under the existing tests, is what macOS needs.
-
-The runtime script, a heredoc in the installer, could also ship as its own file
-in the package and be copied into place. With providers it is now several
+The runtime script, a heredoc in the installer, could ship as its own file in
+the package and be copied into place. With providers it is now several
 heredocs, which makes the case a little stronger.
 
 A rewrite in Node is not recommended for now. It would drop jq and unify JSON
@@ -196,6 +186,5 @@ on each platform, and installing from a git clone would start to require Node.
 1. `umask 077`.
 2. WSL: verify on a real machine, then document.
 3. Research reading usage without the interactive UI.
-4. macOS: verify Keychain access first; build the platform layer only if it
-   works.
+4. macOS: try it on a real Mac, Keychain access first.
 5. Native Windows: not now.

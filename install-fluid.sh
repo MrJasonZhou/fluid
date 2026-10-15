@@ -1423,7 +1423,9 @@ do_warmup() {
     # エージェントが残す子プロセスに warmup のロックを持ち去らせない。
     # 手で実行されても予約で実行されても同じように、/ で動かす（呼び出し元の
     # プロジェクトの AGENTS.md などを読ませない）
-    output="$(cd / && provider_call "$id" warmup "$model" 8>&-)"
+    # exec, not `8>&-` on the call: bash 3.2 lets a function's background
+    # children keep an fd closed that way
+    output="$(exec 8>&-; cd / && provider_call "$id" warmup "$model")"
     rc=$?
 
     # When the agent no longer knows this model, drop to the one it picks for
@@ -1436,7 +1438,7 @@ do_warmup() {
         notify "model-changed" \
             "$(provider_call "$id" label) no longer knows the model Fluid warmed up with ($model), so it has switched to the agent's default. Pick another with: fluid.sh model $id <name>" || true
 
-        output="$(cd / && provider_call "$id" warmup "" 8>&-)"
+        output="$(exec 8>&-; cd / && provider_call "$id" warmup "")"
         rc=$?
     fi
 

@@ -789,7 +789,7 @@ check "throttled: no second look straight away" '[[ $(count scheduler-stalled no
 
 echo 0 > "$BASE/state/stall_checked_at"
 refresh
-wait_until '[[ $(count scheduler-stalled notify-delivered) == 1 ]]'
+wait_until '[[ $(count scheduler-stalled notify-delivered) == 1 && -e "$BASE/state/notified-stalled" ]]'
 check "retry after grace: delivered, marked" '[[ $(count scheduler-stalled notify-delivered) == 1 && -e "$BASE/state/notified-stalled" ]]'
 
 echo 0 > "$BASE/state/stall_checked_at"

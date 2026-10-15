@@ -154,7 +154,7 @@ Es bearbeitet die Einstellungen jedes Agenten direkt und entfernt nur, was Fluid
 
 Hat inzwischen ein anderes Programm eine Status Line um Fluid herum gelegt, macht die Deinstallation es nicht kaputt. Ein kleines Durchreich-Skript bleibt zurück, damit jenes Programm weiter funktioniert, und der Deinstaller weist darauf hin; führen Sie ihn erneut aus, sobald es nicht mehr gebraucht wird. Ein Upgrade in derselben Lage bleibt innerhalb der Kette jenes Programms, statt es seinerseits einzuwickeln.
 
-Eine Kopie jeder Einstellungsdatei von unmittelbar vor der Deinstallation bleibt daneben liegen, ebenso die bei der Installation angelegten Kopien — für den Fall, dass Sie je von Hand zurückwollen.
+Eine Kopie jeder Einstellungsdatei von unmittelbar vor der Deinstallation bleibt daneben liegen, ebenso die bei der Installation angelegten Kopien (jeweils die fünf neuesten) — für den Fall, dass Sie je von Hand zurückwollen.
 
 ## Lizenz
 

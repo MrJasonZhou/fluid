@@ -27,9 +27,15 @@ agent_settings() {
     esac
 }
 
+# 状態栏を包むことのあるエージェントすべて。取り除くときはこちらを使う:
+# エージェント本体が PATH から見えなくなっても、設定に残した痕跡は消せるように
+known_agents() {
+    printf '%s\n' claude agy
+}
+
 wrapped_agents() {
     local id
-    for id in claude agy; do
+    for id in $(known_agents); do
         command -v "$id" >/dev/null 2>&1 && printf '%s\n' "$id"
     done
     return 0
@@ -71,6 +77,61 @@ require() {
             exit 1
         fi
     done
+}
+
+# シンボリックリンクをたどった先の実体のパス。dotfiles で管理された設定を
+# 書き換えるとき、リンクを普通のファイルで置き換えてしまわないように
+resolve_link() {
+    local path="$1" link n=0
+
+    while [[ -L "$path" ]] && (( n < 40 )); do
+        link="$(readlink "$path")"
+        case "$link" in
+            /*) path="$link" ;;
+            *)  path="$(dirname "$path")/$link" ;;
+        esac
+        n=$((n + 1))
+    done
+    printf '%s\n' "$path"
+}
+
+# 設定ファイル $1 を jq（残りの引数、最後がフィルタ）で書き換える。一時ファイルは
+# 実体と同じディレクトリに元の権限のまま作り、検証してから mv で置き換えるので、
+# 途中で失敗しても元のファイルは壊れない。中身が変わらなければ何もしない
+edit_json() {
+    local file target tmp
+    file="$1"
+    shift
+
+    target="$(resolve_link "$file")"
+    tmp="$(mktemp "$(dirname "$target")/.fluid-settings.XXXXXX")" || return 1
+    cp -p "$target" "$tmp" || { rm -f "$tmp"; return 1; }
+
+    if ! jq "$@" "$target" > "$tmp" || ! jq empty "$tmp" 2>/dev/null; then
+        rm -f "$tmp"
+        echo "Could not update $file; it was left as it was." >&2
+        return 1
+    fi
+
+    if cmp -s <(jq -S . "$target") <(jq -S . "$tmp"); then
+        rm -f "$tmp"
+        return 0
+    fi
+    mv "$tmp" "$target"
+}
+
+# 設定のバックアップは新しいものから $2 個だけ残す。名前の末尾の時刻で並べる
+# （cp -p で取るので、更新時刻は元のファイルのものになっている）
+prune_backups() {
+    local file="$1" keep="$2" f
+
+    for f in "$file".fluid-*-backup.*; do
+        [[ -e "$f" ]] || continue
+        printf '%s\t%s\n' "${f##*.}" "$f"
+    done | sort -r | tail -n +"$((keep + 1))" | cut -f2- |
+        while IFS= read -r f; do
+            rm -f "$f"
+        done
 }
 
 # The one definition of "what Fluid added to settings.json", used by
@@ -128,7 +189,7 @@ is_installed() {
     [[ -e "$BASE" ]] && return 0
 
     local id file
-    for id in $(wrapped_agents); do
+    for id in $(known_agents); do
         file="$(agent_settings "$id")" || continue
         [[ -f "$file" ]] || continue
         jq -e --arg marker "$MARKER" --arg orig "" ". as \$in | ($STRIP_FILTER) != \$in" "$file" >/dev/null 2>&1 &&
@@ -140,7 +201,7 @@ is_installed() {
 
 status_command() {
     [[ -f "$1" ]] || return 0
-    jq -r 'if (.statusLine | type) == "object" then .statusLine.command // empty else empty end' "$1"
+    jq -r 'if (.statusLine | type) == "object" then .statusLine.command // empty else empty end' "$1" 2>/dev/null || true
 }
 
 # What uninstall leaves at our script's path when another program still calls
@@ -211,6 +272,7 @@ restore_probed_bin() {
 
 write_probe() {
     local tmp
+    # $1: 調べているエージェント
 
     tmp="$(mktemp "$BASE/.probe.XXXXXX")"
 
@@ -218,7 +280,9 @@ write_probe() {
         echo '#!/usr/bin/env bash'
         echo '# Temporary: Fluid is checking whether another status line program'
         echo '# calls it. See chain_calls_us() in the installer.'
-        echo 'if [[ "${1:-}" == statusline ]]; then'
+        # 調べているエージェントの状態栏からの呼び出しだけを数える。同じ時に
+        # 別のエージェントの状態栏が更新されても、包まれている証拠にはならない
+        printf 'if [[ "${1:-}" == statusline && "${2:-claude}" == %q ]]; then\n' "$1"
         printf '    : > %q\n' "$PROBE_DIR/called"
         echo 'fi'
         # The real script may be moved back while this starts; then use it there
@@ -231,8 +295,29 @@ write_probe() {
     mv "$tmp" "$BIN"
 }
 
+# 状態栏コマンドを一度だけ実行する。専用のプロセスグループで動かし、終われば
+# （10 秒で打ち切っても）グループごと止めるので、孫プロセスも後に残らない
+run_probe() {
+    local cmd="$1" input="$2"
+
+    (
+        set -m
+        bash -c "$cmd" < "$input" >/dev/null 2>&1 &
+        pid=$!
+        i=0
+        while (( i < 100 )) && kill -0 "$pid" 2>/dev/null; do
+            sleep 0.1
+            i=$((i + 1))
+        done
+        kill -TERM -- "-$pid" 2>/dev/null
+        wait "$pid" 2>/dev/null
+    ) >/dev/null 2>&1
+    return 0
+}
+
+# Does agent $2's status line command $1 end up running our script?
 chain_calls_us() {
-    local cmd="$1" rc=1 saved_traps
+    local cmd="$1" id="$2" rc=1 saved_traps
 
     [[ -n "$cmd" && "$cmd" != *"$MARKER"* && -f "$BIN" ]] || return 1
 
@@ -248,8 +333,9 @@ chain_calls_us() {
     PROBE_SAVED="$(mktemp "$BASE/.saved.XXXXXX")"
     cp -p "$BIN" "$PROBE_SAVED"
 
-    write_probe
-    printf '%s' "$PROBE_INPUT" | with_timeout 10 bash -c "$cmd" >/dev/null 2>&1 || true
+    write_probe "$id"
+    printf '%s' "$PROBE_INPUT" > "$PROBE_DIR/input"
+    run_probe "$cmd" "$PROBE_DIR/input"
 
     if [[ -e "$PROBE_DIR/called" ]]; then
         rc=0
@@ -262,44 +348,51 @@ chain_calls_us() {
     return "$rc"
 }
 
-# Take Fluid off this machine: our entries in the current settings.json,
-# our at jobs, and our directory. Each step touches only what is ours and does
-# nothing when that part is already gone, so this is safe to run again, and
-# safe to run on an installation that is only half there.
-#
-# Settings and at jobs are always cleared. Files are where upgrade and
-# uninstall part ways: names passed as arguments survive inside
-# ~/.fluid, and with none the whole directory goes. Uninstall
-# keeps nothing (or only what a pass-through needs); upgrade keeps the runtime
-# state and the user's notifier, then schedules the next run again itself.
-remove_installation() {
-    local keep=("$@")
+# ロック $1 を誰かが持っているか。flock があればそれで、なければ fluid.sh の
+# mkdir のロック（$1.d に持ち主の pid）で確かめる
+lock_busy() {
+    local holder
 
-    local id file orig tmp
+    if command -v flock >/dev/null 2>&1; then
+        [[ -e "$1" ]] || return 1
+        ! flock -n "$1" true 2>/dev/null
+    else
+        holder="$(cat "$1.d/pid" 2>/dev/null)"
+        [[ -n "$holder" ]] && kill -0 "$holder" 2>/dev/null
+    fi
+}
 
-    for id in $(wrapped_agents); do
-        file="$(agent_settings "$id")" || continue
-        [[ -f "$file" ]] || continue
+# 走っている warmup と resume が終わるのを、最長 $1 秒待つ
+wait_for_runs() {
+    local deadline dir lock said=""
+    deadline=$(( $(date +%s) + $1 ))
 
-        orig=""
-        [[ -s "$(agent_orig "$id")" ]] && orig="$(cat "$(agent_orig "$id")")"
-
-        tmp="$(mktemp)"
-        jq --arg marker "$MARKER" --arg orig "$orig" "$STRIP_FILTER" "$file" > "$tmp"
-
-        # Rewrite only when there was something of ours to take out
-        if cmp -s <(jq -S . "$file") <(jq -S . "$tmp"); then
-            rm -f "$tmp"
-        else
-            mv "$tmp" "$file"
-        fi
+    for dir in "$STATE"/*/; do
+        [[ -d "$dir" ]] || continue
+        for lock in "${dir}warmup.lock" "${dir}resume.lock"; do
+            lock_busy "$lock" || continue
+            if [[ -z "$said" ]]; then
+                echo "Waiting for a run in progress to finish..."
+                said=1
+            fi
+            while lock_busy "$lock" && (( $(date +%s) < deadline )); do
+                sleep 0.2
+            done
+        done
     done
+}
 
+# Fluid の予約をすべて取り消す: Linux の at ジョブと、macOS の launchd エージェント
+remove_jobs() {
     if command -v atq >/dev/null 2>&1; then
-        local job_id
+        local job_id rest me
+        me="$(id -un)"
 
-        while read -r job_id _; do
+        while read -r job_id rest; do
             [[ -n "$job_id" ]] || continue
+            # root の atq には全ユーザーのジョブが並ぶ。最後の列が持ち主で、
+            # 他のユーザーの Fluid のジョブには触れない
+            [[ "${rest##*[[:space:]]}" == "$me" ]] || continue
 
             # Read the job from a file descriptor, not a pipe: grep -q quitting
             # early would SIGPIPE `at` and pipefail would call the match a miss
@@ -316,6 +409,50 @@ remove_installation() {
         launchctl remove "$(basename "$plist" .plist)" >/dev/null 2>&1 || true
         rm -f "$plist"
     done
+}
+
+# Take Fluid off this machine: our entries in the current settings.json,
+# our at jobs, and our directory. Each step touches only what is ours and does
+# nothing when that part is already gone, so this is safe to run again, and
+# safe to run on an installation that is only half there.
+#
+# Settings and at jobs are always cleared. Files are where upgrade and
+# uninstall part ways: names passed as arguments survive inside
+# ~/.fluid, and with none the whole directory goes. Uninstall
+# keeps nothing (or only what a pass-through needs); upgrade keeps the runtime
+# state and the user's notifier, then schedules the next run again itself.
+remove_installation() {
+    local keep=("$@")
+
+    local id file orig
+
+    for id in $(known_agents); do
+        file="$(agent_settings "$id")" || continue
+        [[ -f "$file" ]] || continue
+
+        # 壊れた JSON は編集しない。こちらの痕跡が見えるときだけ知らせる
+        if ! jq empty "$file" 2>/dev/null; then
+            grep -qF "$MARKER" "$file" &&
+                echo "$file is not valid JSON, so Fluid's entries in it were left in place." >&2
+            continue
+        fi
+
+        orig=""
+        [[ -s "$(agent_orig "$id")" ]] && orig="$(cat "$(agent_orig "$id")")"
+
+        # Rewrite only when there was something of ours to take out
+        edit_json "$file" --arg marker "$MARKER" --arg orig "$orig" "$STRIP_FILTER"
+    done
+
+    remove_jobs
+
+    # 予約はもう取り消したので、新しい実行は始まらない。すでに走っている
+    # warmup や resume が終わってから消す。先に消すと、終わった実行が
+    # ~/.fluid を作り直し、消えたスクリプトを指す予約を残してしまう
+    wait_for_runs 200
+
+    # 待っている間に終わった実行が、次の予約を入れているかもしれない
+    remove_jobs
 
     if (( ${#keep[@]} == 0 )); then
         rm -rf "$BASE"
@@ -347,10 +484,13 @@ esac
 
 require jq
 
-# Refuse to touch settings that are not valid JSON
-for _id in $(wrapped_agents); do
+# Refuse to touch settings that are not valid JSON: those of an installed agent,
+# and any that hold an entry of ours
+for _id in $(known_agents); do
     _file="$(agent_settings "$_id")" || continue
-    if [[ -f "$_file" ]] && ! jq empty "$_file" 2>/dev/null; then
+    [[ -f "$_file" ]] || continue
+    command -v "$_id" >/dev/null 2>&1 || grep -qF "$MARKER" "$_file" || continue
+    if ! jq empty "$_file" 2>/dev/null; then
         echo "$_file is not valid JSON. Fix it first; Fluid will not edit it." >&2
         exit 1
     fi
@@ -370,18 +510,19 @@ survey_agents() {
     local suffix="$1" id file cmd
     BACKUPS=""
 
-    for id in $(wrapped_agents); do
+    for id in $(known_agents); do
         file="$(agent_settings "$id")" || continue
         [[ -f "$file" ]] || continue
 
         cmd="$(status_command "$file")"
-        if chain_calls_us "$cmd"; then
+        if chain_calls_us "$cmd" "$id"; then
             CHAINED="$CHAINED $id"
             CHAIN_COMMANDS="$CHAIN_COMMANDS$id: $cmd"$'\n'
         fi
 
         cp -p "$file" "$file.fluid-$suffix-backup.$STAMP"
         BACKUPS="$BACKUPS$file.fluid-$suffix-backup.$STAMP"$'\n'
+        prune_backups "$file" 5
     done
 }
 
@@ -469,49 +610,33 @@ fi
 
 survey_agents install
 
-if is_installed; then
-    echo "Existing installation detected. Removing it first..."
-fi
+# 新しいスクリプトはまず一時ディレクトリに書いて検証する。ここで失敗しても、
+# 古いインストールにはまだ何も手を付けていない
+STAGE="$(mktemp -d)"
+REMOVED=""
+INSTALL_DONE=""
 
-# Upgrade clears settings and at jobs exactly as uninstall does, but keeps
-# what is still running (reset times, failure and notification state), the
-# user's notifier (it holds their credentials), the anchor and the log
-# The wrapped commands live under state/, which is kept anyway
-KEEP=("$(basename "$STATE")" "$(basename "$NOTIFY")" "$(basename "$ANCHOR")" "fluid.log")
-remove_installation "${KEEP[@]}"
+# 古いインストールを取り除いた後で止まると、予約が消えたままになる。そのとき
+# は置けたスクリプトで次の実行を予約し直し、どうなったかを伝える
+on_install_exit() {
+    rm -rf "$STAGE"
+    [[ -n "$REMOVED" && -z "$INSTALL_DONE" ]] || return 0
 
-mkdir -p "$BASE" "$STATE" "$PROVIDERS"
-
-# Install the notifier samples when they are reachable from this script.
-# npx puts a symlink in node_modules/.bin, so resolve that first.
-SCRIPT_SRC="${BASH_SOURCE[0]}"
-if [[ -L "$SCRIPT_SRC" ]]; then
-    SCRIPT_SRC="$(readlink -f "$SCRIPT_SRC" 2>/dev/null || readlink "$SCRIPT_SRC")"
-fi
-SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_SRC")" && pwd)"
-
-if compgen -G "$SCRIPT_DIR/notify/*.sample" >/dev/null; then
-    mkdir -p "$BASE/notify"
-    cp -p "$SCRIPT_DIR/notify"/*.sample "$BASE/notify/"
-fi
-
-# Removal has already turned any old wrapper of ours back into the user's own
-# command, so whatever statusLine each agent has now is the one to wrap.
-# Inside another program's chain, removal kept the command we render instead.
-for _id in $(wrapped_agents); do
-    in_chain "$_id" && continue
-    _file="$(agent_settings "$_id")" || continue
-    [[ -f "$_file" ]] || continue
-
-    _current="$(status_command "$_file")"
-    if [[ -n "$_current" && "$_current" != *"$MARKER"* ]]; then
-        mkdir -p "$STATE/$_id"
-        printf '%s\n' "$_current" > "$(agent_orig "$_id")"
+    echo "Installation did not finish." >&2
+    if [[ -x "$BIN" ]] && "$BIN" reschedule >/dev/null 2>&1; then
+        echo "The next runs were scheduled again; run the installer again to finish." >&2
+    else
+        echo "Nothing is scheduled until the installer is run again." >&2
     fi
-done
-unset _id _file _current
+}
+trap on_install_exit EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
-cat > "$BIN" <<'FLUID_SCRIPT'
+mkdir -p "$STAGE/providers"
+
+cat > "$STAGE/fluid.sh" <<'FLUID_SCRIPT'
 #!/usr/bin/env bash
 # Fluid - enhancements for coding agents
 # Copyright (C) 2026 Jason Zhou
@@ -522,7 +647,7 @@ cat > "$BIN" <<'FLUID_SCRIPT'
 # option) any later version. See the LICENSE file for details.
 set -u
 
-VERSION="0.2.0"
+VERSION="0.2.1"
 
 BASE="$HOME/.fluid"
 STATE="$BASE/state"
@@ -539,7 +664,15 @@ RESUME_VERIFY=90
 
 mkdir -p "$STATE"
 
+# アンインストールは state/ ごと消す。その後も走り続けていた実行が、
+# ~/.fluid を作り直したり、消えたスクリプトを予約したりしないように、
+# 書き込む前にこれで確かめる
+installed() {
+    [[ -d "$STATE" ]]
+}
+
 log() {
+    [[ -d "$BASE" ]] || return 0
     printf '%s %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >> "$LOG"
 }
 
@@ -640,6 +773,7 @@ pget() {
 }
 
 pset() {
+    installed || return 0
     mkdir -p "$STATE/$1"
     printf '%s\n' "$3" > "$STATE/$1/$2"
 }
@@ -692,6 +826,7 @@ notify_once() {
     local flag="$1/notified-$2"
 
     [[ -e "$flag" ]] && return 0
+    installed || return 0
     mkdir -p "$1"
 
     if notify "$3" "$4"; then
@@ -849,7 +984,7 @@ release_lock() {
 # flock の fd が子に残ると、子が終わるまで他のプロセスがロックを待たされ、
 # mkdir ロックの一覧が残ると、子の EXIT trap が他人のロックを消してしまう
 drop_inherited_locks() {
-    exec 6>&- 7>&- 8>&- 9>&-
+    exec 5>&- 6>&- 7>&- 8>&- 9>&-
     HELD_LOCKS=()
     trap - EXIT
 }
@@ -911,9 +1046,12 @@ submit_job() {
     read -r month day hour minute <<< "$(fmt_time "$target" '+%m %d %H %M')"
 
     # The job deletes its own plist first, then runs, then unloads itself;
-    # StartCalendarInterval has no year, so it must never be left behind
-    for arg in /bin/bash -c 'rm -f -- "$1"; "$2" "$3" "$4"; launchctl remove "$5"' \
-               fluid-job "$plist" "$SELF" "$sub" "$id" "$label"; do
+    # StartCalendarInterval has no year, so it must never be left behind.
+    # 電源が切れていて時刻を逃した予約は、launchd が拾い直さないまま翌年の
+    # 同じ日まで残る。RunAtLoad でログイン時にも起こし、時刻を過ぎていれば
+    # 取り戻す。読み込まれた直後など、まだ早ければ何もせずに待つ
+    for arg in /bin/bash -c '[ "$(date +%s)" -ge "$6" ] || exit 0; rm -f -- "$1"; "$2" "$3" "$4"; launchctl remove "$5"' \
+               fluid-job "$plist" "$SELF" "$sub" "$id" "$label" "$((target - 30))"; do
         args="$args        <string>$(xml_escape "$arg")</string>"$'\n'
     done
 
@@ -932,6 +1070,8 @@ submit_job() {
     <key>ProgramArguments</key>
     <array>
 $args    </array>
+    <key>RunAtLoad</key>
+    <true/>
     <key>StartCalendarInterval</key>
     <dict>
         <key>Month</key><integer>$((10#$month))</integer>
@@ -980,6 +1120,7 @@ remove_job() {
 # Schedule `scheduled <id>` at $2, replacing whatever this provider had
 arm_job() {
     local dir rc=0
+    installed || return 0
     dir="$(pstate "$1")"
     mkdir -p "$dir"
 
@@ -1245,6 +1386,7 @@ is_long_limited() {
 
 do_warmup() {
     local id="$1" dir
+    installed || return 0
     dir="$(pstate "$id")"
     mkdir -p "$dir"
 
@@ -1268,8 +1410,10 @@ do_warmup() {
     started="$(date +%s)"
     model="$(warmup_model "$id")"
 
-    # エージェントが残す子プロセスに warmup のロックを持ち去らせない
-    output="$(provider_call "$id" warmup "$model" 8>&-)"
+    # エージェントが残す子プロセスに warmup のロックを持ち去らせない。
+    # 手で実行されても予約で実行されても同じように、/ で動かす（呼び出し元の
+    # プロジェクトの AGENTS.md などを読ませない）
+    output="$(cd / && provider_call "$id" warmup "$model" 8>&-)"
     rc=$?
 
     # When the agent no longer knows this model, drop to the one it picks for
@@ -1282,7 +1426,7 @@ do_warmup() {
         notify "model-changed" \
             "$(provider_call "$id" label) no longer knows the model Fluid warmed up with ($model), so it has switched to the agent's default. Pick another with: fluid.sh model $id <name>" || true
 
-        output="$(provider_call "$id" warmup "" 8>&-)"
+        output="$(cd / && provider_call "$id" warmup "" 8>&-)"
         rc=$?
     fi
 
@@ -1290,7 +1434,7 @@ do_warmup() {
         pset "$id" last_success "$started"
         pset "$id" failure_count 0
         rm -f "$dir/auth_required"
-        notify_recovered "$dir" "Fluid is back to normal for $(provider_call "$id" label); windows are opening again." auth failing
+        notify_recovered "$dir" "Fluid is back to normal for $(provider_call "$id" label); windows are opening again." auth failing missing
 
         log "[$id] Warmup succeeded output=$(printf '%s' "$output" | tr '\n' ' ' | cut -c1-200)"
 
@@ -1374,6 +1518,16 @@ scheduled() {
     pset "$id" last_run "$(date +%s)"
     notify_recovered "$STATE" "Fluid's scheduled runs are happening again." stalled
 
+    # エージェントが見つからなければ warmup は失敗し続けるだけなので、
+    # 一度だけ知らせて、一時間ごとに戻ってくるか確かめる
+    if ! { provider_defines "$id" available && "${id}_available"; } 2>/dev/null; then
+        log "[$id] $(provider_call "$id" label) is not installed or not on PATH; looking again in an hour"
+        notify_once "$(pstate "$id")" missing "agent-missing" \
+            "Fluid cannot find $(provider_call "$id" label) (PATH=$PATH), so it has stopped opening windows for it."
+        arm_job "$id" "$(( $(date +%s) + 3600 ))" "agent-missing"
+        return 0
+    fi
+
     # A provider that cannot push its limits gets read now, so the decision
     # below and the next estimate start from something current
     refresh_limits "$id"
@@ -1437,6 +1591,20 @@ resume_due() {
 # One resume job per provider, at the earliest time any session needs it. A
 # job already queued for earlier is kept, and re-arms for the rest when it runs.
 arm_resume() {
+    local dir rc=0
+    installed || return 0
+    dir="$(pstate "$1")"
+    mkdir -p "$dir"
+
+    # 上限に達したセッションは同時にいくつも報告される。同時に差し替えると
+    # 追跡されない予約が残るので、ここは一つずつ
+    take_lock 5 "$dir/resume-job.lock"
+    arm_resume_locked "$@" || rc=$?
+    release_lock 5 "$dir/resume-job.lock"
+    return "$rc"
+}
+
+arm_resume_locked() {
     local id="$1" target="$2" now job old
     now="$(date +%s)"
     (( target > now )) || target=$((now + 5))
@@ -1474,6 +1642,7 @@ rate_limit() {
     pane_pid="$(tmux -S "$socket" display-message -p -t "$pane" '#{pane_pid}' 2>/dev/null)"
     fg="$(foreground_pgid "$pane_pid")"
 
+    installed || return 0
     dir="$(pstate "$id")/pending"
     mkdir -p "$dir"
     file="$dir/$(printf '%s' "$session" | tr -c 'A-Za-z0-9._-' '_').json"
@@ -1487,8 +1656,10 @@ rate_limit() {
         --arg socket "$socket" --arg pane "$pane" --arg pane_pid "$pane_pid" \
         --arg fg "$fg" --arg fg_start "$(process_start "$fg")" \
         --argjson due "$(resume_due "$id")" --argjson attempts "$attempts" \
+        --argjson hit "$(date +%s)" \
         '{session: $session, transcript: $transcript, socket: $socket, pane: $pane,
-          pane_pid: $pane_pid, fg: $fg, fg_start: $fg_start, due: $due, attempts: $attempts}' \
+          pane_pid: $pane_pid, fg: $fg, fg_start: $fg_start, due: $due, attempts: $attempts,
+          hit: $hit, sent: 0, deferred: 0}' \
         > "$file.tmp.$$" && mv "$file.tmp.$$" "$file"
 
     log "[$id] Usage limit hit session=$session pane=$pane; checking again at $(fmt_time "$(jq -r .due "$file")" '+%Y-%m-%d %H:%M:%S')"
@@ -1497,6 +1668,7 @@ rate_limit() {
 
 resume() {
     local id="$1" dir file now
+    installed || return 0
     dir="$(pstate "$id")"
     mkdir -p "$dir/pending"
 
@@ -1505,9 +1677,11 @@ resume() {
     shopt -s nullglob
     for file in "$dir"/pending/*.json; do
         local session transcript socket pane pane_pid fg fg_start due attempts current fields
+        local hit sent deferred in_mode activity
         now="$(date +%s)"
 
-        if ! fields="$(jq -er '@sh "session=\(.session) transcript=\(.transcript) socket=\(.socket) pane=\(.pane) pane_pid=\(.pane_pid) fg=\(.fg) fg_start=\(.fg_start) due=\(.due) attempts=\(.attempts)"' "$file" 2>/dev/null)"; then
+        # hit/sent/deferred は 0.2.1 から。古い記録では 0 として読む
+        if ! fields="$(jq -er '@sh "session=\(.session) transcript=\(.transcript) socket=\(.socket) pane=\(.pane) pane_pid=\(.pane_pid) fg=\(.fg) fg_start=\(.fg_start) due=\(.due) attempts=\(.attempts) hit=\(.hit // 0) sent=\(.sent // 0) deferred=\(.deferred // 0)"' "$file" 2>/dev/null)"; then
             rm -f "$file"
             continue
         fi
@@ -1546,10 +1720,44 @@ resume() {
             continue
         fi
 
+        # 誰かが上限の後にこの tmux セッションでキーを押していれば、その人が
+        # そこにいる。入力の途中かもしれないので、打ち込まずに任せる。自分が
+        # 送ったキーで活動時刻が動く場合に備えて、送った直後の分は数えない
+        activity="$(tmux -S "$socket" display-message -p -t "$pane" '#{session_activity}' 2>/dev/null)"
+        if [[ "$activity" =~ ^[0-9]+$ ]] && (( hit > 0 && activity > hit && activity > sent + 5 )); then
+            log "[$id] Someone has used the tmux session of pane $pane since the limit; leaving session=$session to them"
+            rm -f "$file"
+            continue
+        fi
+
+        # コピーモードの最中に打つと、キーはモードのコマンドとして読まれる。
+        # 試行には数えずに少し後でもう一度見る。一時間続けばあきらめて知らせる
+        in_mode="$(tmux -S "$socket" display-message -p -t "$pane" '#{pane_in_mode}' 2>/dev/null)"
+        if [[ "$in_mode" == 1 ]]; then
+            if (( deferred > 0 && now - deferred > 3600 )); then
+                log "[$id] Pane $pane has been in a tmux mode for an hour; giving up session=$session"
+                notify "resume-failed" \
+                    "$(provider_call "$id" label) did not continue the session in tmux pane $pane after its usage limit reset, and the pane has been in copy mode since. It is waiting for you." || true
+                rm -f "$file"
+                continue
+            fi
+            (( deferred > 0 )) || deferred="$now"
+            if jq --argjson d "$deferred" --argjson due "$((now + RESUME_VERIFY))" \
+                    '.deferred = $d | .due = $due' "$file" > "$file.tmp.$$" &&
+               mv "$file.tmp.$$" "$file"; then
+                log "[$id] Pane $pane is in a tmux mode; looking again shortly session=$session"
+                arm_resume "$id" "$((now + RESUME_VERIFY))"
+            else
+                rm -f "$file.tmp.$$"
+            fi
+            continue
+        fi
+
         # Count the attempt before sending: one that cannot be counted is not
         # sent, or nothing would stop it being sent on every run
         if ! jq --argjson a "$((attempts + 1))" --argjson due "$((now + RESUME_VERIFY))" \
-                '.attempts = $a | .due = $due' "$file" > "$file.tmp.$$" ||
+                --argjson sent "$now" \
+                '.attempts = $a | .due = $due | .sent = $sent' "$file" > "$file.tmp.$$" ||
            ! mv "$file.tmp.$$" "$file"; then
             rm -f "$file.tmp.$$"
             log "[$id] Could not record the resume attempt; not sending session=$session"
@@ -1805,13 +2013,13 @@ case "${1:-}" in
 esac
 FLUID_SCRIPT
 
-chmod +x "$BIN"
+chmod +x "$STAGE/fluid.sh"
 
 # Make sure the script just generated parses
-bash -n "$BIN"
+bash -n "$STAGE/fluid.sh"
 
 # One file per agent. See docs/PROVIDERS.md for what these have to answer.
-cat > "$PROVIDERS/claude.sh" <<'PROVIDER_CLAUDE'
+cat > "$STAGE/providers/claude.sh" <<'PROVIDER_CLAUDE'
 # Claude Code. Its status line hook hands over both windows on every refresh,
 # so this provider pushes: no polling needed.
 claude_label() {
@@ -1872,7 +2080,7 @@ claude_warmup() {
 }
 PROVIDER_CLAUDE
 
-cat > "$PROVIDERS/codex.sh" <<'PROVIDER_CODEX'
+cat > "$STAGE/providers/codex.sh" <<'PROVIDER_CODEX'
 # Codex. It has no status line hook to push readings, but it records its
 # limits in every session log, so this provider is polled instead.
 codex_label() {
@@ -1923,7 +2131,7 @@ codex_warmup() {
 }
 PROVIDER_CODEX
 
-cat > "$PROVIDERS/agy.sh" <<'PROVIDER_AGY'
+cat > "$STAGE/providers/agy.sh" <<'PROVIDER_AGY'
 # Antigravity. Its status line hook pushes quota on every refresh, like Claude
 # Code, but reports what is left rather than what is used, as RFC 3339 times,
 # split across several buckets.
@@ -1970,9 +2178,55 @@ agy_warmup() {
 }
 PROVIDER_AGY
 
-for _provider in "$PROVIDERS"/*.sh; do
+for _provider in "$STAGE/providers"/*.sh; do
     bash -n "$_provider"
 done
+
+if is_installed; then
+    echo "Existing installation detected. Removing it first..."
+fi
+
+# Upgrade clears settings and at jobs exactly as uninstall does, but keeps
+# what is still running (reset times, failure and notification state), the
+# user's notifier (it holds their credentials), the anchor and the log
+# The wrapped commands live under state/, which is kept anyway
+KEEP=("$(basename "$STATE")" "$(basename "$NOTIFY")" "$(basename "$ANCHOR")" "fluid.log")
+REMOVED=1
+remove_installation "${KEEP[@]}"
+
+mkdir -p "$BASE" "$STATE" "$PROVIDERS"
+
+mv "$STAGE/fluid.sh" "$BIN"
+mv "$STAGE/providers"/*.sh "$PROVIDERS/"
+
+# Install the notifier samples when they are reachable from this script.
+# npx puts a symlink in node_modules/.bin, so resolve that first.
+SCRIPT_SRC="${BASH_SOURCE[0]}"
+if [[ -L "$SCRIPT_SRC" ]]; then
+    SCRIPT_SRC="$(readlink -f "$SCRIPT_SRC" 2>/dev/null || readlink "$SCRIPT_SRC")"
+fi
+SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_SRC")" && pwd)"
+
+if compgen -G "$SCRIPT_DIR/notify/*.sample" >/dev/null; then
+    mkdir -p "$BASE/notify"
+    cp -p "$SCRIPT_DIR/notify"/*.sample "$BASE/notify/"
+fi
+
+# Removal has already turned any old wrapper of ours back into the user's own
+# command, so whatever statusLine each agent has now is the one to wrap.
+# Inside another program's chain, removal kept the command we render instead.
+for _id in $(wrapped_agents); do
+    in_chain "$_id" && continue
+    _file="$(agent_settings "$_id")" || continue
+    [[ -f "$_file" ]] || continue
+
+    _current="$(status_command "$_file")"
+    if [[ -n "$_current" && "$_current" != *"$MARKER"* ]]; then
+        mkdir -p "$STATE/$_id"
+        printf '%s\n' "$_current" > "$(agent_orig "$_id")"
+    fi
+done
+unset _id _file _current
 
 # Removal above has already taken out every entry of ours; a status line
 # wrapper is all Fluid adds, and inside another program's chain not even
@@ -1983,9 +2237,7 @@ for _id in $(wrapped_agents); do
     _file="$(agent_settings "$_id")" || continue
     [[ -f "$_file" ]] || continue
 
-    TMP_SETTINGS="$(mktemp)"
-
-    jq --arg status_cmd "$BIN statusline $_id" '
+    edit_json "$_file" --arg status_cmd "$BIN statusline $_id" '
         .statusLine = (
             (.statusLine // {})
             + {
@@ -1993,10 +2245,7 @@ for _id in $(wrapped_agents); do
                 "command": $status_cmd
             }
         )
-    ' "$_file" > "$TMP_SETTINGS"
-
-    jq empty "$TMP_SETTINGS"
-    mv "$TMP_SETTINGS" "$_file"
+    '
 done
 unset _id _file
 
@@ -2004,30 +2253,27 @@ unset _id _file
 # resume backstop needs. Added whether or not its status line is ours, unless
 # the Claude Code plugin is installing us: it carries that hook itself.
 if command -v claude >/dev/null 2>&1 && [[ "${FLUID_HOOK:-}" != plugin ]]; then
-    _file="$(agent_settings claude)"
-    TMP_SETTINGS="$(mktemp)"
-
-    jq --arg cmd "$BIN rate-limit claude" '
+    edit_json "$(agent_settings claude)" --arg cmd "$BIN rate-limit claude" '
         .hooks.StopFailure = (
             (.hooks.StopFailure // [])
             + [{"matcher": "rate_limit", "hooks": [{"type": "command", "command": $cmd}]}]
         )
-    ' "$_file" > "$TMP_SETTINGS"
-
-    jq empty "$TMP_SETTINGS"
-    mv "$TMP_SETTINGS" "$_file"
-    unset _file
+    '
 fi
 
 # Removal dropped the old at job; put the run the previous version had
 # planned back on the new one
 if ! "$BIN" reschedule; then
-    echo "Warning: could not schedule the next run; it will be set on the next status line refresh." >&2
+    echo "Warning: could not schedule the next run (see $BASE/fluid.log)." >&2
+    echo "         Claude Code and Antigravity try again on their next status line refresh;" >&2
+    echo "         for Codex, run the installer again once the scheduler works." >&2
 fi
 
 # `at` accepts jobs whether or not atd runs them, so check the daemon itself
 SCHEDULER_RC=0
 "$BIN" scheduler-check || SCHEDULER_RC=$?
+
+INSTALL_DONE=1
 
 echo
 echo "Fluid installed."

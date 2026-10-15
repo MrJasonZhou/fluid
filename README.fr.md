@@ -154,7 +154,7 @@ Elle modifie les réglages de chaque agent sur place et n'en retire que ce que F
 
 Si un autre programme a depuis enveloppé une status line autour de Fluid, la désinstallation ne le casse pas. Un petit script relais est laissé en place pour que ce programme continue de fonctionner, et le désinstallateur vous le signale ; relancez-le quand plus rien n'en a besoin. Une mise à jour dans la même situation reste à l'intérieur de la chaîne de ce programme au lieu de l'envelopper à son tour.
 
-Une copie de chaque fichier de réglages datant de juste avant la désinstallation est conservée à côté, tout comme les copies faites à l'installation, au cas où vous voudriez un jour revenir en arrière à la main.
+Une copie de chaque fichier de réglages datant de juste avant la désinstallation est conservée à côté, tout comme les copies faites à l'installation (les cinq plus récentes), au cas où vous voudriez un jour revenir en arrière à la main.
 
 ## Licence
 

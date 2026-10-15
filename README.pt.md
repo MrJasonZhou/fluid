@@ -154,7 +154,7 @@ Ela edita as configurações de cada agente no próprio lugar e retira apenas o 
 
 Se depois outro programa envolveu alguma status line por fora do Fluid, desinstalar não o quebra. Fica para trás um pequeno script de repasse para que esse programa continue funcionando, e o desinstalador avisa; rode de novo quando nada mais precisar dele. Uma atualização na mesma situação permanece dentro da cadeia desse programa em vez de envolvê-lo por sua vez.
 
-Uma cópia de cada arquivo de configuração de logo antes da desinstalação fica ao lado dele, assim como as cópias feitas na instalação, caso você precise voltar atrás à mão.
+Uma cópia de cada arquivo de configuração de logo antes da desinstalação fica ao lado dele, assim como as cópias feitas na instalação (as cinco mais recentes), caso você precise voltar atrás à mão.
 
 ## Licença
 

@@ -64,10 +64,13 @@ cat > "$q/$n"
 echo "job $n at $2"
 EOF
 
+# 本物と同じく最後の列が持ち主。ジョブに "# owner=" の行があればその人のもの
 cat > "$FAKES/atq" <<'EOF'
 #!/usr/bin/env bash
 for f in "$CP_TEST/queue"/*; do
-    [[ -e "$f" ]] && printf '%s\tThu Jan  1 00:00:00 2099 a user\n' "$(basename "$f")"
+    [[ -e "$f" ]] || continue
+    owner="$(sed -n 's/^# owner=//p' "$f")"
+    printf '%s\tThu Jan  1 00:00:00 2099 a %s\n' "$(basename "$f")" "${owner:-$(id -un)}"
 done
 EOF
 
@@ -89,6 +92,8 @@ case "$(cat "$CP_TEST/claude-mode" 2>/dev/null)" in
     transient) echo "Failed to authenticate: OAuth session expired and could not be refreshed" >&2; exit 1 ;;
     lockheld)  echo "OAuth access token could not be refreshed: another Claude Code process is holding the refresh lock" >&2; exit 1 ;;
     fail) echo "API Error: Overloaded" >&2; exit 1 ;;
+    # 応答に時間のかかる warmup
+    slow) sleep 2; echo OK ;;
     # An agent that has dropped the model it is asked for
     badmodel)
         if [[ "$*" == *--model* ]]; then
@@ -104,6 +109,7 @@ EOF
 cat > "$FAKES/codex" <<'EOF'
 #!/usr/bin/env bash
 echo "$*" >> "$CP_TEST/codex-runs"
+pwd > "$CP_TEST/codex-cwd"
 case "$(cat "$CP_TEST/codex-mode" 2>/dev/null)" in
     # 終了後もバックグラウンドに子プロセスを残すエージェント
     child) sleep 5 </dev/null >/dev/null 2>&1 & ;;
@@ -162,6 +168,29 @@ sleep 2
 printf Y
 EOF
 
+# 自分のプロセスグループに子を残す状態栏
+cat > "$FAKES/spawner" <<'EOF'
+#!/usr/bin/env bash
+sleep 30 </dev/null >/dev/null 2>&1 &
+echo $! > "$CP_TEST/spawned"
+cat >/dev/null
+printf Y
+EOF
+
+# mv: 設定ファイルへの mv を、$CP_TEST/mv-allow に書いた回数だけ通し、それ以降は失敗する
+cat > "$FAKES/mv" <<'EOF'
+#!/usr/bin/env bash
+if [[ -e "$CP_TEST/mv-allow" && "${@: -1}" == *settings.json ]]; then
+    n="$(cat "$CP_TEST/mv-allow")"
+    (( n > 0 )) || exit 1
+    echo $((n - 1)) > "$CP_TEST/mv-allow"
+fi
+for real in /bin/mv /usr/bin/mv; do
+    [[ -x "$real" ]] && exec "$real" "$@"
+done
+exit 127
+EOF
+
 # systemctl and pgrep report atd up or down, as the test switches it
 cat > "$FAKES/systemctl" <<'EOF'
 #!/usr/bin/env bash
@@ -180,6 +209,8 @@ EOF
 cat > "$FAKES/tmux" <<'EOF'
 #!/usr/bin/env bash
 case "$*" in
+    *pane_in_mode*)      cat "$CP_TEST/tmux-in-mode" 2>/dev/null || echo 0 ;;
+    *session_activity*)  cat "$CP_TEST/tmux-activity" 2>/dev/null || echo 0 ;;
     *display-message*) [[ -s "$CP_TEST/tmux-pane-pid" ]] && cat "$CP_TEST/tmux-pane-pid" ;;
     *send-keys*)       echo "${@: -1}" >> "$CP_TEST/tmux-keys" ;;
     *)                 exit 1 ;;
@@ -205,6 +236,15 @@ EOF
 
 chmod +x "$FAKES"/*
 
+# claude だけが PATH にない環境: 偽のコマンドから claude を除き、jq を足す
+NOCLAUDE="$CP_TEST/noclaude"
+mkdir -p "$NOCLAUDE"
+for _f in "$FAKES"/*; do
+    [[ "$(basename "$_f")" == claude ]] || ln -s "$_f" "$NOCLAUDE/"
+done
+ln -s "$(command -v jq)" "$NOCLAUDE/jq"
+NOCLAUDE_PATH="$NOCLAUDE:/usr/bin:/bin:/usr/sbin:/sbin"
+
 # ---------------------------------------------------------------- helpers
 
 new_home() {
@@ -215,7 +255,7 @@ new_home() {
     BASE="$H/.fluid"
     CP="$BASE/fluid.sh"
     ORIGFILE="$BASE/state/claude/original-statusline-command"
-    rm -f "$QUEUE"/* "$CP_TEST"/claude-mode "$CP_TEST"/codex-mode "$CP_TEST"/claude-runs "$CP_TEST"/claude-args "$CP_TEST"/codex-runs "$CP_TEST"/agy-runs "$CP_TEST"/notify-*
+    rm -f "$QUEUE"/* "$CP_TEST"/claude-mode "$CP_TEST"/codex-mode "$CP_TEST"/mv-allow "$CP_TEST"/tmux-in-mode "$CP_TEST"/tmux-activity "$CP_TEST"/claude-runs "$CP_TEST"/claude-args "$CP_TEST"/codex-runs "$CP_TEST"/agy-runs "$CP_TEST"/notify-*
     AGYS="$H/.gemini/antigravity-cli/settings.json"
     echo up > "$CP_TEST/atd"
 }
@@ -485,6 +525,102 @@ for sig in HUP TERM INT; do
     check "SIG$sig during probe: no temporary files left"  '! compgen -G "$BASE/.saved.*" >/dev/null && ! compgen -G "$BASE/.probe.*" >/dev/null'
     check "SIG$sig during probe: still installed"          '[[ -d "$BASE/state" ]]'
 done
+
+# ======================================================================
+section "the probe tells one agent's status line from another's"
+
+# claude の状態栏を調べている最中に、包まれたままの agy の状態栏が更新される
+new_home probe-agents
+with_cs
+mkdir -p "$(dirname "$AGYS")"
+printf '{"statusLine":{"type":"command","command":"%s"}}\n' "$FAKES/cs" > "$AGYS"
+install_cp >/dev/null
+jq --arg c "$FAKES/slowreplace" '.statusLine.command = $c' "$S" > "$S.t" && mv "$S.t" "$S"
+install_cp uninstall > "$CP_TEST/probe.out" 2>&1 &
+installer=$!
+wait_for_probe
+printf '{}' | in_home "$CP" statusline agy >/dev/null 2>&1
+wait "$installer"
+check "another agent's refresh is not a hit" '[[ $(cat "$CP_TEST/probe.out") != *pass-through* && ! -e "$BASE" ]]'
+
+# 調べるために起こした状態栏が、子プロセスを後に残さない
+new_home probe-children
+with_cs
+install_cp >/dev/null
+jq --arg c "$FAKES/spawner" '.statusLine.command = $c' "$S" > "$S.t" && mv "$S.t" "$S"
+rm -f "$CP_TEST/spawned"
+install_cp uninstall >/dev/null 2>&1
+check "the probe ran it"                  '[[ -s "$CP_TEST/spawned" ]]'
+# 止めた子が回収されずにゾンビで残る環境（PID 1 が回収しないコンテナ）もある
+check "and nothing it started outlives it" '[[ $(ps -o stat= -p "$(cat "$CP_TEST/spawned")" 2>/dev/null) != [!Z]* ]]'
+
+# ======================================================================
+section "uninstall cleans up what it can, and waits for what is running"
+
+# claude が PATH から見えなくなっても、設定に残した痕跡は消える
+new_home gone-claude
+with_cs
+install_cp >/dev/null
+HOME="$H" PATH="$NOCLAUDE_PATH" bash "$INSTALLER" uninstall >/dev/null 2>&1
+check "status line and hook taken out without claude on PATH" '! grep -qF "$MARKER" "$S" && [[ $(jq -r .statusLine.command "$S") == "$FAKES/cs" ]]'
+check "and the rest removed"                                  '[[ ! -e "$BASE" && $(our_jobs) == 0 ]]'
+
+# 走っている warmup が終わるのを待ってから消す
+new_home inflight
+with_cs
+install_cp >/dev/null
+echo slow > "$CP_TEST/claude-mode"
+cp_run scheduled claude >/dev/null 2>&1 &
+runner=$!
+wait_until '[[ -s "$CP_TEST/claude-runs" ]]'
+out="$(install_cp uninstall)"
+wait "$runner"
+check "it says it is waiting"                     '[[ $out == *"Waiting for a run in progress"* ]]'
+check "the finished warmup leaves nothing behind" '[[ ! -e "$BASE" && $(our_jobs) == 0 ]]'
+
+# 他のユーザーのジョブには触れない（root の atq には全員のジョブが並ぶ）
+new_home others
+with_cs
+install_cp >/dev/null
+printf '# owner=someoneelse\n/home/someoneelse/.fluid/fluid.sh scheduled claude\n' > "$QUEUE/7"
+install_cp uninstall >/dev/null
+check "another user's job is left alone" '[[ -e "$QUEUE/7" ]]'
+
+# ======================================================================
+section "settings are edited where they live, and backups do not pile up"
+
+new_home links
+mkdir -p "$H/dotfiles"
+printf '{"statusLine":{"type":"command","command":"%s"}}\n' "$FAKES/cs" > "$H/dotfiles/claude.json"
+chmod 644 "$H/dotfiles/claude.json"
+ln -sf ../dotfiles/claude.json "$S"
+for i in 1 2 3 4 5 6 7; do
+    echo '{}' > "$S.fluid-install-backup.20200101-00000$i"
+done
+install_cp >/dev/null
+check "a linked settings file stays a link"   '[[ -L $S && $(jq -r .statusLine.command "$H/dotfiles/claude.json") == "$CP statusline claude" ]]'
+check "and keeps its permissions"             '[[ $(ls -lL "$S" | cut -c1-10) == "-rw-r--r--" ]]'
+check "only the five newest backups are kept" '[[ $(( $(compgen -G "$S.fluid-*-backup.*" | wc -l) )) == 5 && ! -e "$S.fluid-install-backup.20200101-000003" && -e "$S.fluid-install-backup.20200101-000007" ]]'
+install_cp uninstall >/dev/null
+check "uninstall edits through the link too"  '[[ -L $S ]] && ! grep -qF "$MARKER" "$H/dotfiles/claude.json"'
+
+# ======================================================================
+section "an install that stops half way leaves the schedule in place"
+
+new_home halfway
+with_cs
+install_cp >/dev/null
+T="$(( $(date +%s) + 3600 ))"
+printf '{"rate_limits":{"five_hour":{"used_percentage":10,"resets_at":%s}}}' "$T" | cp_run observe claude >/dev/null
+check "a run is planned"            '[[ $(our_jobs) == 1 ]]'
+# 古い設定を取り除く書き換えは通り、包み直す書き換えで失敗する
+echo 1 > "$CP_TEST/mv-allow"
+out="$(install_cp 2>&1)"; rc=$?
+rm -f "$CP_TEST/mv-allow"
+check "the installer fails and says so"  '[[ $rc != 0 && $out == *"did not finish"* ]]'
+check "the user's status line is intact" '[[ $(jq -r .statusLine.command "$S") == "$FAKES/cs" ]]'
+check "and the planned run is back"      '[[ $(our_jobs) == 1 && $(cat "$BASE/state/claude/at_target") == $(( T + 15 )) ]]'
+install_cp uninstall >/dev/null
 
 # ======================================================================
 section "upgrade keeps runtime state; uninstall removes it"
@@ -793,6 +929,30 @@ install_cp uninstall >/dev/null
 check "uninstall takes both"         '[[ ! -e "$BASE" && $(our_jobs) == 0 ]]'
 
 # ======================================================================
+section "an agent that has gone missing is reported, not retried every minute"
+
+new_home missing
+with_cs
+install_cp >/dev/null
+make_notifier
+rm -f "$CP_TEST/claude-runs"
+HOME="$H" PATH="$NOCLAUDE_PATH" "$CP" scheduled claude >/dev/null 2>&1
+check "no warmup attempted"        '[[ ! -e "$CP_TEST/claude-runs" && ! -e "$BASE/state/claude/failure_count" ]]'
+check "looked at again in an hour" '[[ $(cat "$BASE/state/claude/at_reason") == agent-missing && $(cat "$BASE/state/claude/at_target") -ge $(( $(date +%s) + 3500 )) ]]'
+check "and reported once"          '[[ $(count agent-missing notify-delivered) == 1 ]]'
+HOME="$H" PATH="$NOCLAUDE_PATH" "$CP" scheduled claude >/dev/null 2>&1
+check "not reported again"         '[[ $(count agent-missing notify-attempts) == 1 ]]'
+cp_run scheduled claude >/dev/null 2>&1
+check "back again: says so"        '[[ $(count recovered notify-delivered) == 1 && ! -e "$BASE/state/claude/notified-missing" ]]'
+
+# warmup はどこから呼ばれても / で動く
+PROJ="$CP_TEST/project-warm"
+mkdir -p "$PROJ"
+( cd "$PROJ" && cp_run warmup codex >/dev/null 2>&1 )
+check "warmups run in /"           '[[ $(cat "$CP_TEST/codex-cwd") == / ]]'
+install_cp uninstall >/dev/null
+
+# ======================================================================
 section "an agent with its own settings file is wrapped there"
 
 new_home agy
@@ -832,7 +992,7 @@ section "anchor arithmetic, on fixed dates"
 # sourcing it would overwrite BASE and friends.
 anchor_cases() {
     local lib="$CP_TEST/lib.sh"
-    sed -n "/^cat > \"\$BIN\" <<'FLUID_SCRIPT'$/,/^FLUID_SCRIPT$/p" "$INSTALLER" |
+    sed -n "/^cat > \"\$STAGE\/fluid.sh\" <<'FLUID_SCRIPT'$/,/^FLUID_SCRIPT$/p" "$INSTALLER" |
         sed '1d;$d' | sed '/^case "\${1:-}" in$/,$d' > "$lib"
     HOME="$CP_TEST/home-fn"
     mkdir -p "$HOME"
@@ -1039,6 +1199,33 @@ jq '.due = 0 | .attempts = 2' "$PENDING" > "$PENDING.t" && mv "$PENDING.t" "$PEN
 cp_run resume claude
 check "two tries: gives up and says so"  '[[ $(keys) == "continue Enter " && ! -e "$PENDING" && $(count resume-failed notify-delivered) == 1 ]]'
 
+# コピーモード中は打ち込まず、試行にも数えずに後でもう一度見る
+hit TMUX=/tmp/sock,1,0 TMUX_PANE=%3
+due_now
+echo 1 > "$CP_TEST/tmux-in-mode"
+cp_run resume claude
+check "pane in copy mode: nothing typed yet"    '[[ $(keys) == "continue Enter " && $(jq .attempts "$PENDING") == 0 && $(jq .deferred "$PENDING") -gt 0 ]]'
+rm -f "$CP_TEST/tmux-in-mode"
+
+# 上限の後に誰かがこのセッションでキーを押したなら、その人に任せる
+echo "$(( $(date +%s) + 5 ))" > "$CP_TEST/tmux-activity"
+due_now
+cp_run resume claude
+check "someone typed since: left to them"       '[[ $(keys) == "continue Enter " && ! -e "$PENDING" ]]'
+rm -f "$CP_TEST/tmux-activity"
+
+# 同時に上限に達した複数のセッションでも、resume の予約は一つ
+hooks=""
+rm -f "$QUEUE"/*
+rm -f "$BASE/state/claude/resume_job" "$BASE/state/claude/resume_target"
+for n in 1 2 3 4 5 6; do
+    printf '{"session_id":"c%s","transcript_path":"%s"}' "$n" "$T" |
+        in_home env TMUX=/tmp/sock,1,0 TMUX_PANE=%3 "$CP" rate-limit claude &
+    hooks="$hooks $!"
+done
+wait $hooks
+check "simultaneous hooks queue one resume job" '[[ $(( $(grep -l "resume claude" "$QUEUE"/* 2>/dev/null | wc -l) )) == 1 ]]'
+
 kill "$PANE_A" "$PANE_B" 2>/dev/null
 install_cp uninstall >/dev/null
 check "uninstall takes the hook out"     '! grep -qF "$MARKER" "$S" && [[ $(our_jobs) == 0 ]]'
@@ -1135,8 +1322,17 @@ ARGV=()
 while IFS= read -r line; do ARGV+=("$line"); done < <(sed -n '/<key>ProgramArguments/,/<\/array>/s:.*<string>\(.*\)</string>.*:\1:p' "$P")
 JOBPATH="$(sed -n 's:.*<key>PATH</key><string>\(.*\)</string>.*:\1:p' "$P")"
 check "the plist carries the PATH it was queued with" '[[ $JOBPATH == "$FAKES:"* ]]'
+check "it also runs at load, to catch up"       'grep -q "<key>RunAtLoad</key>" "$P"'
 rm -f "$CP_TEST/claude-runs"
-env -i HOME="$H" CP_TEST="$CP_TEST" PATH="${JOBPATH:-/usr/bin:/bin:/usr/sbin:/sbin}" "${ARGV[@]}"
+launchd_run() {
+    env -i HOME="$H" CP_TEST="$CP_TEST" PATH="${JOBPATH:-/usr/bin:/bin:/usr/sbin:/sbin}" "$@"
+}
+# 読み込まれた直後（時刻の前）は何もしない
+launchd_run "${ARGV[@]}"
+check "before its time: waits"                 '[[ -e $P && ! -e "$CP_TEST/claude-runs" ]]'
+# 時刻を過ぎていれば（逃した予約をログイン時に拾うときも）走る
+ARGV[${#ARGV[@]}-1]=0
+launchd_run "${ARGV[@]}"
 check "the agent deletes itself and warms up" '[[ ! -e $P && $(count run claude-runs) == 1 ]]'
 check "and queues the next window"        '[[ $(plists) == 1 ]]'
 

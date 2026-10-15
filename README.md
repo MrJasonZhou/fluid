@@ -154,7 +154,7 @@ It edits each agent's settings in place and takes out only what Fluid added: the
 
 If another program has since wrapped a status line around Fluid, uninstalling will not break it. A small pass-through is left behind so that program keeps working, and the uninstaller tells you so; run it again once nothing needs it any more. Upgrading in the same situation stays inside that program's chain rather than wrapping it.
 
-A copy of every settings file from just before uninstalling is kept next to it, as are the copies made at install time, in case you ever need to go back by hand.
+A copy of every settings file from just before uninstalling is kept next to it, as are the copies made at install time (the five most recent of them), in case you ever need to go back by hand.
 
 ## License
 

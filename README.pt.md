@@ -59,7 +59,7 @@ Ou como plugin do Claude Code, cujo instalador você roda depois de dentro do pr
 /fluid:install
 ```
 
-Ele já traz o hook da Retomada, então o instalador não o põe nas suas configurações, e adiciona `/fluid:status`, `/fluid:anchor` e `/fluid:uninstall`.
+Ele já traz o hook da Retomada, então o instalador não o põe nas suas configurações, e adiciona `/fluid:status`, `/fluid:anchor` e `/fluid:uninstall`. Onde o Claude Code carrega o módulo de hooks do plugin (os módulos de hooks ainda estão sendo liberados para as contas), o Fluid lê o uso e retoma uma sessão parada de dentro do próprio Claude Code, sem mexer nas configurações do Claude Code; nos demais casos, ele envolve a linha de status como descrito abaixo. `/fluid:status` mostra qual está em uso.
 
 Para cada agente que tem status line, o instalador envolve a que você já tinha, que continua aparecendo exatamente como antes; é, junto com um hook para o Claude Code (veja Retomada), a única mudança nas configurações daquele agente, e todo arquivo de configuração é salvo antes. O Codex não precisa de configuração alguma. Rodar o instalador de novo é uma atualização limpa, não uma segunda cópia, e preserva para cada agente a próxima execução agendada, o estado dela e o seu notificador.
 

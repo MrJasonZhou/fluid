@@ -59,7 +59,7 @@ bash install-fluid.sh
 /fluid:install
 ```
 
-「續跑」用的 hook 由外掛自帶，所以安裝指令碼不會再把它寫進你的設定；另外還有 `/fluid:status`、`/fluid:anchor` 和 `/fluid:uninstall`。
+「續跑」用的 hook 由外掛自帶，所以安裝指令碼不會再把它寫進你的設定；另外還有 `/fluid:status`、`/fluid:anchor` 和 `/fluid:uninstall`。在 Claude Code 會載入外掛 hooks 模組的環境裡（hooks 模組仍在按帳號逐步開放），Fluid 直接在 Claude Code 內部讀取用量並續跑停下的工作階段，完全不改 Claude Code 的設定；其他環境則照下文所述包裝狀態列。用 `/fluid:status` 可以看到目前用的是哪一種。
 
 對每個帶 status line 的助手，安裝指令碼會包裝你現有的那條（顯示和原本完全一樣），這是它對該助手設定做的唯一改動（Claude Code 另外多一個 hook，見「續跑」），而且每個設定檔都會先備份。Codex 完全不需要設定。重複執行安裝指令碼是一次乾淨的升級，而不是裝第二份，並且會保留每個助手下一次排好的工作、它的狀態，以及你的通知指令碼。
 

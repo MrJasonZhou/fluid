@@ -836,10 +836,11 @@ for LOCKS in flock mkdir; do
     mkdir -p "$BASE/state/claude"
     if [[ "$LOCKS" == flock ]]; then LPATH="$FAKES:$PATH"; else LPATH="$FAKES:$NOFLOCK"; fi
 
-    # 遅い notifier: 停止チェックが走っている間を長く取る
+    # 遅い notifier: 停止チェックが走っている間を長く取る。次の読み取りに許す
+    # 5 秒より十分長く、遅い bash 3.2 が混んだ機械で動いても取り違えない
     cat > "$BASE/notify.sh" <<'EOF'
 #!/usr/bin/env bash
-sleep 3
+sleep 8
 echo "$CP_EVENT" >> "$CP_TEST/notify-delivered"
 EOF
     chmod +x "$BASE/notify.sh"
@@ -858,7 +859,7 @@ EOF
 
     stall_reading 10
     wait_until '[[ -e "$BASE/state/stall_checked_at" ]]'
-    stall_reading 2; rc=$?
+    stall_reading 5; rc=$?
     check "$LOCKS: the next reading is not kept waiting" '[[ $rc == 0 ]]'
 
     # 生きている別のプロセスが持つロックを、停止チェックの終わりに消してはならない
@@ -866,9 +867,10 @@ EOF
     holder=$!
     mkdir -p "$BASE/state/claude/schedule.lock.d"
     echo "$holder" > "$BASE/state/claude/schedule.lock.d/pid"
-    # notifier は 3 秒かかり、wait_until 一回の上限と同じなので二回まで待つ
-    wait_until '[[ $(count scheduler-stalled notify-delivered) == 1 ]]' ||
-        wait_until '[[ $(count scheduler-stalled notify-delivered) == 1 ]]'
+    # notifier は 8 秒かかる。wait_until 一回は 3 秒までなので、四回まで待つ
+    for _ in 1 2 3 4; do
+        wait_until '[[ $(count scheduler-stalled notify-delivered) == 1 ]]' && break
+    done
     sleep 0.3
     check "$LOCKS: the stall check ran"                   '[[ $(count scheduler-stalled notify-delivered) == 1 ]]'
     check "$LOCKS: and left others' locks alone"          '[[ -e "$BASE/state/claude/schedule.lock.d/pid" ]]'

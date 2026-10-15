@@ -22,6 +22,11 @@ The core thinks in terms of one **short window** and one **long window**:
 | `long_used_percent` | how much of the long window is spent, if there is one |
 | `long_resets_at` | epoch second the long window resets, if there is one |
 
+Each is a plain number. A reading that has `used_percent` or `resets_at`
+describes the whole picture: a long window it leaves out is taken to be gone,
+and the stored one is dropped. A reading with neither (nothing used yet this
+session) leaves what is stored alone.
+
 Everything else is the provider's business.
 
 ## Contract

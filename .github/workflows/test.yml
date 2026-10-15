@@ -22,7 +22,14 @@ jobs:
           ln -s /bin/bash "$RUNNER_TEMP/bin/bash"
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
           /bin/bash --version | head -1
-          for t in timeout gtimeout tac flock; do command -v "$t" || true; done
+          # Hide whatever the runner image brings, then make sure it is gone
+          for t in timeout gtimeout tac gtac flock; do
+            for p in $(which -a "$t" 2>/dev/null); do sudo mv "$p" "$p.hidden"; done
+          done
+          hash -r
+          for t in timeout gtimeout tac gtac flock; do
+            if command -v "$t"; then echo "$t is still on PATH"; exit 1; fi
+          done
       # jq ships with both runners; claude, at and launchctl are faked
       - run: bash tests/run.sh
 

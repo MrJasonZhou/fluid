@@ -77,6 +77,13 @@ interactive UI (see Open questions).
   Both would still earn `alert` if anyone wants the auth and scheduler
   warnings for them.
 - `fluid.log` is never pruned. It grows slowly.
+- Two installers running at once (an upgrade in two terminals) are not kept
+  apart: both probe status line chains by swapping `fluid.sh`, and one can
+  save the other's probe as the real script. A lock around the whole install
+  or uninstall would close it.
+- The test suite counts only `check` results; a setup step that fails (a
+  missing directory, say) prints an error and leaves its check testing less
+  than it claims. Failing on unexpected stderr would catch those.
 
 ### Decided against
 

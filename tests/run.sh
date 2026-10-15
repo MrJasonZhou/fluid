@@ -5,8 +5,8 @@
 #
 # Everything runs inside a throwaway directory: its own HOME, and fake claude,
 # at, atq, atrm, systemctl, pgrep, launchctl and uname on PATH. The real at queue and
-# settings.json are never touched. Needs jq, flock and timeout, which Claude
-# Plus needs anyway.
+# settings.json are never touched. Needs jq, as Fluid does; flock and
+# timeout are used where they exist, as on a Mac they do not.
 
 set -uo pipefail
 
@@ -506,9 +506,12 @@ use_slow_replacement() {
     rm -f "$CP_TEST/claude-runs" "$CP_TEST/probe-release"
 }
 
+# Up to ten seconds: on a busy machine the installer takes a while to get
+# there, and a SIGINT sent before then lands while bash waits on a child, which
+# bash then ignores
 wait_for_probe() {
     local i
-    for i in $(seq 1 60); do
+    for i in $(seq 1 200); do
         # The real script has been swapped out (true of old and new probes)
         [[ -f "$CP" ]] && ! grep -q "^observe()" "$CP" && return 0
         sleep 0.05
@@ -528,7 +531,11 @@ wait "$installer"
 check "scheduled run during probe still ran"    '[[ -s "$CP_TEST/claude-runs" ]]'
 check "other calls during probe are not a hit"   '[[ $(cat "$CP_TEST/probe.out") != *pass-through* && ! -e "$BASE" ]]'
 
-for sig in HUP TERM INT; do
+# A suite started in the background inherits SIGINT ignored, which no shell
+# below it can undo; INT is then not something the installer can ever get
+SIGS="HUP TERM INT"
+[[ -n "$(trap -p INT)" ]] && SIGS="HUP TERM"
+for sig in $SIGS; do
     use_slow_replacement "probe-$sig"
     # Job control gives the background installer its own process group and
     # keeps SIGINT from being ignored, as it would be from a terminal

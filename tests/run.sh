@@ -164,11 +164,15 @@ cat >/dev/null
 printf Y
 EOF
 
-# Same, but slow, so the chain probe stays in place long enough to race with
+# Same, but it holds the chain probe in place until the test lets go
+# ($CP_TEST/probe-release) or 8 seconds pass, so a race with it is not left to timing
 cat > "$FAKES/slowreplace" <<'EOF'
 #!/usr/bin/env bash
 cat >/dev/null
-sleep 2
+for _ in $(seq 1 80); do
+    [[ -e "$CP_TEST/probe-release" ]] && break
+    sleep 0.1
+done
 printf Y
 EOF
 
@@ -477,7 +481,7 @@ use_slow_replacement() {
     with_cs
     install_cp >/dev/null
     jq --arg c "$FAKES/slowreplace" '.statusLine.command = $c' "$S" > "$S.t" && mv "$S.t" "$S"
-    rm -f "$CP_TEST/claude-runs"
+    rm -f "$CP_TEST/claude-runs" "$CP_TEST/probe-release"
 }
 
 wait_for_probe() {
@@ -497,6 +501,7 @@ wait_for_probe
 check "probe is in place for the race"          '[[ $? == 0 ]]'
 cp_run scheduled claude >/dev/null
 cp_run status >/dev/null
+touch "$CP_TEST/probe-release"
 wait "$installer"
 check "scheduled run during probe still ran"    '[[ -s "$CP_TEST/claude-runs" ]]'
 check "other calls during probe are not a hit"   '[[ $(cat "$CP_TEST/probe.out") != *pass-through* && ! -e "$BASE" ]]'
@@ -513,6 +518,7 @@ for sig in HUP TERM INT; do
     kill -"$sig" "$installer"
     wait "$installer"
     rc=$?
+    touch "$CP_TEST/probe-release"
     check "SIG$sig during probe: installer stops"          '[[ $rc != 0 ]]'
     check "SIG$sig during probe: real script restored"     'grep -q "^observe()" "$CP"'
     check "SIG$sig during probe: no temporary files left"  '! compgen -G "$BASE/.saved.*" >/dev/null && ! compgen -G "$BASE/.probe.*" >/dev/null'
@@ -556,6 +562,25 @@ out="$(install_cp uninstall)"
 wait "$runner"
 check "it says it is waiting"                     '[[ $out == *"Waiting for a run in progress"* ]]'
 check "the finished warmup leaves nothing behind" '[[ ! -e "$BASE" && $(our_jobs) == 0 ]]'
+
+# 状態栏の更新が卸す最中にも読み取りを渡してくる。消している最中のディレクトリに
+# 書き込まれても卸しは失敗せず、終わった後に ~/.fluid が作り直されることもない
+new_home busy
+with_cs
+install_cp >/dev/null
+reading="$(printf '{"rate_limits":{"five_hour":{"used_percentage":10,"resets_at":%s}}}' "$(( $(date +%s) + 3600 ))")"
+(
+    for _ in $(seq 1 400); do
+        printf '%s' "$reading" | in_home "$CP" observe claude mod >/dev/null 2>&1
+    done
+) &
+feeder=$!
+wait_until '[[ -s "$BASE/state/claude/last_reading" ]]'
+install_cp uninstall >/dev/null 2>&1; rc=$?
+kill "$feeder" 2>/dev/null
+wait "$feeder" 2>/dev/null
+check "readings during uninstall: it still succeeds" '[[ $rc == 0 ]]'
+check "and nothing is built back up afterwards"     '[[ ! -e "$BASE" ]] && ! compgen -G "$BASE.removing.*" >/dev/null'
 
 # 他のユーザーのジョブには触れない（root の atq には全員のジョブが並ぶ）
 new_home others

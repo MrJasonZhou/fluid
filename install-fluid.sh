@@ -456,7 +456,14 @@ remove_installation() {
     remove_jobs
 
     if (( ${#keep[@]} == 0 )); then
-        rm -rf "$BASE"
+        # Move it aside first: a run still going (a status line refresh, say)
+        # then cannot write into it while it is being deleted, which would
+        # make rm fail with "Directory not empty"
+        if [[ -e "$BASE" ]]; then
+            local gone="$BASE.removing.$$"
+            mv "$BASE" "$gone"
+            rm -rf "$gone" || rm -rf "$gone"
+        fi
     elif [[ -d "$BASE" ]]; then
         local name spare=()
 
@@ -654,11 +661,12 @@ SELF="$BASE/fluid.sh"
 
 DEFAULT_WINDOW=18000
 STALL_GRACE=300
-mkdir -p "$STATE"
 
 # アンインストールは state/ ごと消す。その後も走り続けていた実行が、
 # ~/.fluid を作り直したり、消えたスクリプトを予約したりしないように、
-# 書き込む前にこれで確かめる
+# 書き込む前にこれで確かめる。Directories are made one level at a time
+# (mkdir, never mkdir -p) for the same reason: a run that started before an
+# uninstall must not build ~/.fluid back up again under its feet.
 installed() {
     [[ -d "$STATE" ]]
 }
@@ -762,8 +770,8 @@ pget() {
 
 pset() {
     installed || return 0
-    mkdir -p "$STATE/$1"
-    printf '%s\n' "$3" > "$STATE/$1/$2"
+    mkdir "$STATE/$1" 2>/dev/null
+    printf '%s\n' "$3" 2>/dev/null > "$STATE/$1/$2"
 }
 
 # The model this provider warms up with. Unset means its own choice; "-"
@@ -815,7 +823,7 @@ notify_once() {
 
     [[ -e "$flag" ]] && return 0
     installed || return 0
-    mkdir -p "$1"
+    mkdir "$1" 2>/dev/null
 
     if notify "$3" "$4"; then
         : > "$flag"
@@ -1110,7 +1118,7 @@ arm_job() {
     local dir rc=0
     installed || return 0
     dir="$(pstate "$1")"
-    mkdir -p "$dir"
+    mkdir "$dir" 2>/dev/null
 
     # ロックは予約の差し替えの間だけ持つ。プロセスの終了まで持つと、続く
     # warmup や後から起こすバックグラウンドの子の間も状態栏を待たせてしまう
@@ -1393,7 +1401,7 @@ do_warmup() {
     local id="$1" dir
     installed || return 0
     dir="$(pstate "$id")"
-    mkdir -p "$dir"
+    mkdir "$dir" 2>/dev/null
 
     # Never let two warmups run at once
     if ! take_lock 8 "$dir/warmup.lock" try; then

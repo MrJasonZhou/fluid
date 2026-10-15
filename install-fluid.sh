@@ -658,7 +658,7 @@ cat > "$STAGE/fluid.sh" <<'FLUID_SCRIPT'
 set -u
 umask 077
 
-VERSION="0.3.1"
+VERSION="0.3.2"
 
 BASE="$HOME/.fluid"
 STATE="$BASE/state"

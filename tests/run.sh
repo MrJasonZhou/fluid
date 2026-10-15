@@ -1123,7 +1123,7 @@ before="$(cksum < "$CS")"
 check "status before install says so" '[[ $(in_home "$ROOT/scripts/entry.sh" status) == *"/fluid:install"* ]]'
 out="$(in_home env FLUID_MOD=1 "$ROOT/scripts/entry.sh" install)"
 check "plugin install: Claude Code settings untouched"  '[[ $(cksum < "$CS") == "$before" ]]'
-check "plugin install: no estimate-only notice"         '[[ $out != *"estimates only"* ]]'
+check "plugin install: no missing-module notice"        '[[ $out != *"Claude Code: "* ]]'
 check "plugin install: other agents still wrapped"      '[[ $(jq -r .statusLine.command "$S") == "$CP statusline agy" ]]'
 
 in_home "$ROOT/scripts/entry.sh" anchor '07:00;touch x' >/dev/null; rc=$?
@@ -1159,11 +1159,11 @@ printf '{"statusLine":{"type":"command","command":"%s"}}\n' "$FAKES/cs" > "$CS"
 before="$(cksum < "$CS")"
 out="$(in_home "$ROOT/scripts/entry.sh" install)"
 check "no module: Claude Code settings untouched"       '[[ $(cksum < "$CS") == "$before" ]]'
-check "no module: says it keeps windows on estimates"   '[[ $out == *"hooks module did not load"* ]]'
+check "no module: says nothing is planned until a reading" '[[ $out == *"hooks module did not load"* && $out == *"first reading"* ]]'
 install_cp uninstall >/dev/null
 out="$(install_cp)"
 check "no plugin: Claude Code settings untouched"       '[[ $(cksum < "$CS") == "$before" ]]'
-check "no plugin: points at the plugin"                 '[[ $out == *"/plugin install fluid"* ]]'
+check "no plugin: points at the plugin"                 '[[ $out == *"/plugin install fluid"* && $out == *"nothing is planned"* ]]'
 cp_run rate-limit claude </dev/null >/dev/null 2>&1; rc=$?
 check "no plugin: the old hook command is gone"         '[[ $rc == 2 ]]'
 install_cp uninstall >/dev/null

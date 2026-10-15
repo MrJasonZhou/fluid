@@ -2038,12 +2038,12 @@ fi
 # which sets FLUID_MOD in the session it runs in
 if command -v claude >/dev/null 2>&1; then
     if [[ "${FLUID_HOOK:-}" != plugin ]]; then
-        echo "Claude Code: windows are kept on estimates only. For its readings and resume,"
-        echo "             install the plugin: /plugin install fluid --marketplace MrJasonZhou/fluid"
+        echo "Claude Code: no readings reach Fluid without its plugin, so nothing is planned"
+        echo "             for it. Install it: /plugin install fluid --marketplace MrJasonZhou/fluid"
     elif [[ -z "${FLUID_MOD:-}" ]]; then
-        echo "Claude Code: the plugin's hooks module did not load in this session, so windows"
-        echo "             are kept on estimates only until it does (hooks modules are still"
-        echo "             rolling out to accounts)."
+        echo "Claude Code: the plugin's hooks module did not load in this session, so nothing"
+        echo "             is planned for it until the module sends a first reading. Start a"
+        echo "             new session; hooks modules are still rolling out to accounts."
     fi
 fi
 if [[ -n "$CHAINED" ]]; then

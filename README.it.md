@@ -154,7 +154,7 @@ Modifica sul posto le impostazioni di ogni agente e toglie solo ciò che Fluid h
 
 Se nel frattempo un altro programma ha avvolto una status line attorno a Fluid, la disinstallazione non lo rompe. Resta un piccolo script di passaggio perché quel programma continui a funzionare, e il disinstallatore te lo segnala; eseguilo di nuovo quando non serve più a nulla. Un aggiornamento nella stessa situazione resta dentro la catena di quel programma invece di avvolgerlo a sua volta.
 
-Una copia di ogni file di impostazioni di subito prima della disinstallazione resta lì accanto, così come le copie fatte all'installazione, nel caso ti serva mai tornare indietro a mano.
+Una copia di ogni file di impostazioni di subito prima della disinstallazione resta lì accanto, così come le copie fatte all'installazione (le cinque più recenti), nel caso ti serva mai tornare indietro a mano.
 
 ## Licenza
 

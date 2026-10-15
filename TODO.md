@@ -11,7 +11,11 @@ which came too close to other listings), and the whole project was then renamed
 from Claude Plus to Fluid, starting over at 0.1.0 (repository, npm package `fluid-agents`, and
 `~/.fluid` in place of `~/.claude/claude-plus`, with no migration), and 0.2.0 added macOS:
 launchd one-shot agents instead of `at`, with stand-ins for flock, GNU
-date, timeout, tac and /proc; nothing else has been started. Code is referred to by
+date, timeout, tac and /proc, and 0.2.1 fixed what a review of error handling
+and of the effect on running sessions and jobs found (launchd PATH, the at
+working directory, locks held past their use, uninstall racing a run in
+progress, settings behind a symlink, and more; see the 0.2.1 commits); nothing
+else has been started. Code is referred to by
 function name rather than line number, since lines move.
 
 ## Features

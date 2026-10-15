@@ -50,6 +50,8 @@ section() {
 # at: -c prints a queued job, -t queues stdin and answers like the real one
 cat > "$FAKES/at" <<'EOF'
 #!/usr/bin/env bash
+# Fluid hands at only a few variables, CP_TEST not among them
+CP_TEST="$(cd "$(dirname "$0")/.." && pwd)"
 q="$CP_TEST/queue"
 if [[ "$1" == -c ]]; then
     cat "$q/$2" 2>/dev/null
@@ -908,12 +910,22 @@ mkdir -p "$PROJ"
 rm -f "$CP_TEST/at-cwd" "$CP_TEST/at-env"
 ( cd "$PROJ" &&
   printf '{"rate_limits":{"five_hour":{"used_percentage":10,"resets_at":%s}}}' "$(( $(date +%s) + 3600 ))" |
-      in_home env TMUX=/tmp/tmux-0/default,1,0 TMUX_PANE=%3 CLAUDECODE=1 FOO_KEEP=1 \
-          "$CP" observe claude mod >/dev/null )
+      in_home env TMUX=/tmp/tmux-0/default,1,0 TMUX_PANE=%3 CLAUDECODE=1 GITHUB_TOKEN=secret \
+          HTTPS_PROXY=http://proxy:3128 "$CP" observe claude mod >/dev/null )
 rm -rf "$PROJ"
 check "queued from /, not the session's directory" '[[ $(our_jobs) == 1 && $(cat "$CP_TEST/at-cwd") == / ]]'
 check "without the session's own variables"        '! grep -Eq "^(TMUX|TMUX_PANE|CLAUDECODE|FLUID_IN_STATUSLINE)=" "$CP_TEST/at-env"'
-check "but with the rest of the environment"       'grep -qx "FOO_KEEP=1" "$CP_TEST/at-env"'
+check "nor any token it had (at keeps them on disk)" '! grep -q "^GITHUB_TOKEN=" "$CP_TEST/at-env"'
+check "but with what an agent needs to run"        'grep -qx "HOME=$H" "$CP_TEST/at-env" && grep -q "^PATH=$FAKES:" "$CP_TEST/at-env" && grep -qx "HTTPS_PROXY=http://proxy:3128" "$CP_TEST/at-env"'
+check "state and log readable by the user alone"   '[[ -z $(find "$BASE" -perm -004 -o -perm -040 | head -1) ]]'
+
+# 番号が使い回されて、他人のジョブが同じ番号になった（root の atq には全員の
+# ジョブが並ぶ）。予約し直しても、それを自分のものとして消さない
+other="$(cat "$BASE/state/claude/at_job")"
+printf '# owner=someoneelse\n/home/someoneelse/.fluid/fluid.sh scheduled claude\n' > "$QUEUE/$other"
+printf '{"rate_limits":{"five_hour":{"used_percentage":10,"resets_at":%s}}}' "$(( $(date +%s) + 7200 ))" |
+    cp_run observe claude mod
+check "a reused job number of another user's is left alone" '[[ -e "$QUEUE/$other" && $(cat "$BASE/state/claude/at_job") != "$other" ]]'
 install_cp uninstall >/dev/null
 
 # ======================================================================

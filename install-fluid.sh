@@ -7,6 +7,8 @@
 # Free Software Foundation, either version 3 of the License, or (at your
 # option) any later version. See the LICENSE file for details.
 set -euo pipefail
+# 状態、ログ、包んだ状態栏コマンド（トークンを含むことがある）は本人だけが読める
+umask 077
 
 BASE="$HOME/.fluid"
 STATE="$BASE/state"
@@ -649,6 +651,7 @@ cat > "$STAGE/fluid.sh" <<'FLUID_SCRIPT'
 # Free Software Foundation, either version 3 of the License, or (at your
 # option) any later version. See the LICENSE file for details.
 set -u
+umask 077
 
 VERSION="0.3.0"
 
@@ -1011,18 +1014,25 @@ submit_job() {
     local target="$1" sub="$2" id="$3"
 
     if [[ "$SCHEDULER" == at ]]; then
-        local output
+        local output v env=()
         # at はジョブに提出時の作業ディレクトリと環境を記録し、実行時にまず
         # そのディレクトリへ cd して、失敗すれば何も実行せずに終わる。提出元は
         # たいてい状態栏を描くセッションで、その作業ディレクトリ（後で消える
-        # worktree など）に依存させないよう / から提出し、セッション固有の
-        # 変数も持ち込まない
+        # worktree など）に依存させないよう / から提出する。環境は at の spool
+        # に平文で残るので、エージェントを動かすのに要るものだけを渡す。
+        # セッションのトークンの類は持ち込まない
+        for v in HOME USER LOGNAME PATH SHELL LANG LC_CTYPE TZ TMPDIR \
+                 XDG_CONFIG_HOME XDG_DATA_HOME XDG_STATE_HOME XDG_CACHE_HOME \
+                 XDG_RUNTIME_DIR DBUS_SESSION_BUS_ADDRESS CLAUDE_CONFIG_DIR CODEX_HOME \
+                 http_proxy https_proxy all_proxy no_proxy \
+                 HTTP_PROXY HTTPS_PROXY ALL_PROXY NO_PROXY \
+                 NODE_EXTRA_CA_CERTS SSL_CERT_FILE SSL_CERT_DIR FLUID_SCHEDULER; do
+            [[ -n "${!v:-}" ]] && env+=("$v=${!v}")
+        done
         output="$(
             cd / || exit 1
-            unset TMUX TMUX_PANE FLUID_IN_STATUSLINE FLUID_MOD CLAUDECODE \
-                CLAUDE_CODE_ENTRYPOINT CLAUDE_CODE_SSE_PORT
             printf '%q %q %q\n' "$SELF" "$sub" "$id" |
-                LC_ALL=C at -t "$(fmt_time "$target" '+%Y%m%d%H%M.%S')" 2>&1
+                env -i ${env[@]+"${env[@]}"} LC_ALL=C at -t "$(fmt_time "$target" '+%Y%m%d%H%M.%S')" 2>&1
         )" || {
             log "[$id] at refused the job: $output"
             return 1
@@ -1095,7 +1105,9 @@ job_exists() {
     [[ -n "$job" ]] || return 1
 
     if [[ "$SCHEDULER" == at ]]; then
-        atq 2>/dev/null | awk '{print $1}' | grep -qx "$job"
+        # root の atq には全員のジョブが並ぶ（最後の列が持ち主）。番号が
+        # 使い回されても、他人のジョブを自分のものと取り違えて atrm しない
+        atq 2>/dev/null | awk -v j="$job" -v me="$(id -un)" '$1 == j && $NF == me { f = 1 } END { exit !f }'
     else
         [[ -f "$LAUNCH_DIR/$LAUNCH_PREFIX.$job.plist" ]]
     fi
@@ -2021,6 +2033,10 @@ if compgen -G "$SCRIPT_DIR/notify/*.sample" >/dev/null; then
     mkdir -p "$BASE/notify"
     cp -p "$SCRIPT_DIR/notify"/*.sample "$BASE/notify/"
 fi
+
+# Earlier versions left all of this readable by everyone. The samples too:
+# a notifier copied from one keeps its mode, and holds credentials
+chmod -R go-rwx "$BASE"
 
 # Removal has already turned any old wrapper of ours back into the user's own
 # command, so whatever statusLine each agent has now is the one to wrap.

@@ -19,7 +19,8 @@ analytics, and sends nothing to its author.
 
 ## What it stores
 
-Everything lives in `~/.fluid/` on your machine and nowhere else:
+Almost everything lives in `~/.fluid/` on your machine, readable by your
+user alone:
 
 - reset times, usage percentages, the time of the next scheduled run, failure
   counts and alert flags;
@@ -27,7 +28,19 @@ Everything lives in `~/.fluid/` on your machine and nowhere else:
 - your notifier, `notify.sh`, if you set one up. It may hold a key or password
   you put there yourself; Fluid only runs it.
 
-Uninstalling deletes `~/.fluid/`.
+Outside it, on the same machine:
+
+- **the next scheduled run**: on Linux, an `at` job in the system's spool,
+  which records the environment it was queued with. Fluid passes only what an
+  agent needs to run (home, user, `PATH`, locale, XDG and proxy settings and
+  the like), so tokens in your shell environment stay out of it. A proxy
+  setting that carries a password does go in. On macOS, a launchd agent in
+  `~/Library/LaunchAgents/` that records `PATH`;
+- **settings backups**: a copy of each settings file Fluid edits, taken just
+  before, next to it (the five newest are kept).
+
+Uninstalling deletes `~/.fluid/` and the scheduled runs; the settings
+backups stay, for you to remove.
 
 ## What leaves your machine
 

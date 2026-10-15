@@ -59,13 +59,6 @@ then idle for a window it could have used.
 Needs research: a way to read current usage or the next reset without the
 interactive UI (see Open questions).
 
-#### Keep state private
-
-`original-statusline-command` is run through `bash -c`, and `state/` and the
-log describe when the user works. Everything inherits the default umask and is
-typically readable by other local users. `umask 077` in the installer and the
-generated script would close this.
-
 ### Low priority
 
 - Native Windows: runs would need `schtasks`; Resume, now inside Claude Code,

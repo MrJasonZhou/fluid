@@ -363,14 +363,14 @@ lock_busy() {
     fi
 }
 
-# 走っている warmup と resume が終わるのを、最長 $1 秒待つ
+# 走っている warmup と予約の差し替えが終わるのを、最長 $1 秒待つ
 wait_for_runs() {
     local deadline dir lock said=""
     deadline=$(( $(date +%s) + $1 ))
 
     for dir in "$STATE"/*/; do
         [[ -d "$dir" ]] || continue
-        for lock in "${dir}warmup.lock" "${dir}resume.lock"; do
+        for lock in "${dir}warmup.lock" "${dir}schedule.lock"; do
             lock_busy "$lock" || continue
             if [[ -z "$said" ]]; then
                 echo "Waiting for a run in progress to finish..."
@@ -448,23 +448,24 @@ remove_installation() {
     remove_jobs
 
     # 予約はもう取り消したので、新しい実行は始まらない。すでに走っている
-    # warmup や resume が終わってから消す。先に消すと、終わった実行が
+    # warmup や予約の差し替えが終わってから消す。先に消すと、終わった実行が
     # ~/.fluid を作り直し、消えたスクリプトを指す予約を残してしまう
     wait_for_runs 200
-
-    # 待っている間に終わった実行が、次の予約を入れているかもしれない
-    remove_jobs
 
     if (( ${#keep[@]} == 0 )); then
         # Move it aside first: a run still going (a status line refresh, say)
         # then cannot write into it while it is being deleted, which would
-        # make rm fail with "Directory not empty"
-        if [[ -e "$BASE" ]]; then
-            local gone="$BASE.removing.$$"
-            mv "$BASE" "$gone"
-            rm -rf "$gone" || rm -rf "$gone"
-        fi
-    elif [[ -d "$BASE" ]]; then
+        # make rm fail with "Directory not empty". It also tells such a run
+        # Fluid is gone: one that queues a job after the sweep below sees
+        # that and takes its job back out (arm_job_locked).
+        local gone="$BASE.removing.$$"
+        [[ -e "$BASE" ]] && mv "$BASE" "$gone"
+        # 待っている間に終わった実行が、次の予約を入れているかもしれない
+        remove_jobs
+        rm -rf "$gone" || rm -rf "$gone"
+    else
+        remove_jobs
+        [[ -d "$BASE" ]] || return 0
         local name spare=()
 
         for name in "${keep[@]}"; do
@@ -1145,20 +1146,30 @@ arm_job_locked() {
         return 0
     fi
 
-    # Drop the job scheduled last time
-    remove_job "$old_job"
-
+    # The new job first, the old one only once it is in: a scheduler failing
+    # for a moment then leaves the plan as it was instead of no plan at all
     local job_id
-    job_id="$(submit_job "$target" scheduled "$id")" || return 1
+    job_id="$(submit_job "$target" scheduled "$id")" || job_id=""
 
     if [[ -z "$job_id" ]]; then
-        log "[$id] Could not determine the job id"
+        log "[$id] Could not schedule the next run"
+        notify_once "$(pstate "$id")" schedule "schedule-failed" \
+            "Fluid could not schedule the next run for $(provider_call "$id" label), so nothing is planned for it. See ~/.fluid/fluid.log"
         return 1
+    fi
+
+    # Uninstalled while this was being submitted: take the job back out,
+    # or it would run a script that is gone
+    if ! installed; then
+        remove_job "$job_id"
+        return 0
     fi
 
     pset "$id" at_job "$job_id"
     pset "$id" at_target "$target"
     pset "$id" at_reason "$reason"
+    [[ "$old_job" == "$job_id" ]] || remove_job "$old_job"
+    notify_recovered "$(pstate "$id")" "Fluid can schedule runs for $(provider_call "$id" label) again." schedule
 
     log "[$id] Scheduled job=$job_id target=$(fmt_time "$target" '+%Y-%m-%d %H:%M:%S') reason=$reason"
 }
@@ -1419,8 +1430,9 @@ do_warmup() {
         return 0
     fi
 
-    local started output rc model
+    local started output rc model planned
     started="$(date +%s)"
+    planned="$(pget "$id" at_job)"
     model="$(warmup_model "$id")"
 
     # エージェントが残す子プロセスに warmup のロックを持ち去らせない。
@@ -1452,6 +1464,12 @@ do_warmup() {
         notify_recovered "$dir" "Fluid is back to normal for $(provider_call "$id" label); windows are opening again." auth failing missing
 
         log "[$id] Warmup succeeded output=$(printf '%s' "$output" | tr '\n' ' ' | cut -c1-200)"
+
+        # A reading that came in while this ran already planned from the
+        # official reset; an estimate must not replace it
+        if [[ "$(pget "$id" at_job)" != "$planned" && "$(pget "$id" at_reason)" == official-reset ]]; then
+            return 0
+        fi
 
         # A warmup usually reports nothing about limits, so estimate the next
         # window from this request and let the next reading correct it
@@ -1507,23 +1525,28 @@ do_warmup() {
 
 # Put back the run an earlier version had planned, after an upgrade removed
 # its at job. The target was computed then; one already missed runs now.
+#
+# Every provider with a plan gets it back, even one whose agent is off PATH
+# just now: `scheduled` then reports it missing and looks again hourly. Fails
+# when any of them could not be scheduled.
 reschedule() {
-    local id target reason
+    local id target reason rc=0
 
-    for id in $(active_providers); do
+    for id in $(provider_ids); do
         provider_can "$id" keep || continue
 
         target="$(pget "$id" at_target)"
         reason="$(pget "$id" at_reason)"
 
         if [[ "$target" =~ ^[0-9]+$ ]]; then
-            arm_job "$id" "$target" "${reason:-rescheduled}"
-        else
+            arm_job "$id" "$target" "${reason:-rescheduled}" || rc=1
+        elif active_providers | grep -qx "$id"; then
             # Nothing planned yet. A provider we can poll starts right away;
             # one that pushes waits for its first reading.
             refresh_limits "$id"
         fi
     done
+    return "$rc"
 }
 
 scheduled() {
@@ -1546,6 +1569,17 @@ scheduled() {
     # A provider that cannot push its limits gets read now, so the decision
     # below and the next estimate start from something current
     refresh_limits "$id"
+
+    # The fresh reading says a window is already open (someone used the agent
+    # since this was planned), and refresh_limits planned from its reset.
+    # Only pulled readings are trusted for this: they are read just now.
+    local reset
+    reset="$(pget "$id" resets_at)"
+    if provider_defines "$id" pull_limits && [[ "$reset" =~ ^[0-9]+$ ]] &&
+       (( reset > $(date +%s) + 60 )); then
+        log "[$id] A window is already open until $(fmt_time "$reset" '+%H:%M'); no warmup needed"
+        return 0
+    fi
 
     do_warmup "$id" || true
 }
@@ -1978,11 +2012,9 @@ mv "$STAGE/fluid.sh" "$BIN"
 mv "$STAGE/providers"/*.sh "$PROVIDERS/"
 
 # Install the notifier samples when they are reachable from this script.
-# npx puts a symlink in node_modules/.bin, so resolve that first.
-SCRIPT_SRC="${BASH_SOURCE[0]}"
-if [[ -L "$SCRIPT_SRC" ]]; then
-    SCRIPT_SRC="$(readlink -f "$SCRIPT_SRC" 2>/dev/null || readlink "$SCRIPT_SRC")"
-fi
+# npx puts a relative symlink in node_modules/.bin, so resolve that first,
+# link by link (macOS before 12.3 has no readlink -f)
+SCRIPT_SRC="$(resolve_link "${BASH_SOURCE[0]}")"
 SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_SRC")" && pwd)"
 
 if compgen -G "$SCRIPT_DIR/notify/*.sample" >/dev/null; then

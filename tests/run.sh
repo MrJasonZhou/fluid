@@ -581,6 +581,7 @@ kill "$feeder" 2>/dev/null
 wait "$feeder" 2>/dev/null
 check "readings during uninstall: it still succeeds" '[[ $rc == 0 ]]'
 check "and nothing is built back up afterwards"     '[[ ! -e "$BASE" ]] && ! compgen -G "$BASE.removing.*" >/dev/null'
+check "and no job is left for the script it removed" '[[ $(our_jobs) == 0 ]]'
 
 # 他のユーザーのジョブには触れない（root の atq には全員のジョブが並ぶ）
 new_home others
@@ -680,8 +681,9 @@ check "fresh install: no job yet"  '[[ $(our_jobs) == 0 ]]'
 install_cp uninstall >/dev/null
 check "uninstall: state removed"   '[[ ! -e "$BASE" && $(our_jobs) == 0 ]]'
 
+gen="$(sed -n '/^cat > "$STAGE\/fluid.sh" <<.FLUID_SCRIPT.$/,/^FLUID_SCRIPT$/p' "$INSTALLER")"
 check "generated script never turns errexit on" \
-    '! sed -n "/^cat > \"\$BIN\" <<.FLUID_SCRIPT.\$/,/^FLUID_SCRIPT\$/p" "$INSTALLER" | grep -qE "^\s*set -e"'
+    '(( $(wc -l <<< "$gen") > 500 )) && ! grep -qE "^\s*set -e" <<< "$gen"'
 
 # ======================================================================
 section "alerts are marked sent only once delivered"
@@ -776,6 +778,7 @@ refresh() {
     printf '{}' | cp_run observe claude >/dev/null
 }
 
+mkdir -p "$BASE/state/claude"
 echo $(( $(date +%s) + 600 )) > "$BASE/state/claude/at_target"
 refresh
 sleep 0.5
@@ -934,6 +937,12 @@ check "claude planned on its own"    '[[ $(cat "$BASE/state/claude/at_target") =
 check "codex plan untouched"         '[[ $(cat "$BASE/state/codex/at_target") == $(( NOW + 1815 )) ]]'
 check "a job each now"               '[[ $(our_jobs) == 2 ]]'
 
+# まだ開いている窓（誰かが使った）: warmup せず、その reset に予約し直す
+codex_log "$(( NOW + 900 ))" "$(( NOW + 200000 ))"
+cp_run scheduled codex >/dev/null 2>&1
+check "an open window is not warmed up again" '[[ ! -e "$CP_TEST/codex-runs" && $(cat "$BASE/state/codex/at_target") == $(( NOW + 915 )) ]]'
+
+codex_log "$(( NOW - 60 ))" "$(( NOW + 200000 ))"
 cp_run scheduled codex >/dev/null 2>&1
 check "codex warmed up with its own command" 'grep -q -- "exec --skip-git-repo-check -s read-only" "$CP_TEST/codex-runs"'
 check "claude was not run"           '[[ $(count run claude-runs) == 0 ]]'
@@ -945,6 +954,63 @@ check "failures counted per agent"   '[[ $(cat "$BASE/state/claude/failure_count
 
 install_cp uninstall >/dev/null
 check "uninstall takes both"         '[[ ! -e "$BASE" && $(our_jobs) == 0 ]]'
+
+# ======================================================================
+section "a scheduler that fails for a moment does not lose the plan"
+
+new_home transact
+echo '{}' > "$S"
+install_cp >/dev/null
+make_notifier
+T="$(( $(date +%s) + 3600 ))"
+reading_at() {
+    printf '{"rate_limits":{"five_hour":{"used_percentage":10,"resets_at":%s}}}' "$1" | cp_run observe claude mod
+}
+reading_at "$T"
+job="$(cat "$BASE/state/claude/at_job")"
+touch "$CP_TEST/at-refuse"
+reading_at "$(( T + 600 ))"
+check "a refused job leaves the planned one queued" '[[ -e "$QUEUE/$job" && $(cat "$BASE/state/claude/at_job") == "$job" && $(cat "$BASE/state/claude/at_target") == $(( T + 15 )) ]]'
+check "and says so"                                 '[[ $(count schedule-failed notify-delivered) == 1 ]]'
+
+# 失敗したのが最後のエージェントでなくても、失敗として返す
+echo 999 > "$BASE/state/claude/at_job"
+cp_run reschedule >/dev/null 2>&1; rc=$?
+check "reschedule fails when any agent could not be planned" '[[ $rc != 0 ]]'
+echo "$job" > "$BASE/state/claude/at_job"
+
+rm -f "$CP_TEST/at-refuse"
+reading_at "$(( T + 600 ))"
+check "once it works again: replaced, and said so" '[[ ! -e "$QUEUE/$job" && $(our_jobs) == 1 && $(count recovered notify-delivered) == 1 ]]'
+
+# warmup の間に届いた公式の reset を、見積もりで上書きしない
+echo slow > "$CP_TEST/claude-mode"
+cp_run warmup claude >/dev/null 2>&1 &
+warmer=$!
+wait_until '[[ -s "$CP_TEST/claude-runs" ]]'
+reading_at "$(( T + 1200 ))"
+wait "$warmer"
+check "a reading during a warmup outlives its estimate" '[[ $(cat "$BASE/state/claude/at_target") == $(( T + 1215 )) && $(cat "$BASE/state/claude/at_reason") == official-reset ]]'
+install_cp uninstall >/dev/null
+
+# npx は node_modules/.bin に相対のリンクを置く。readlink -f のない macOS でも
+# 通知の見本まで入る
+new_home npx
+echo '{}' > "$S"
+NPX="$CP_TEST/npx/node_modules"
+mkdir -p "$NPX/fluid-agents" "$NPX/.bin" "$CP_TEST/bsd"
+cp "$INSTALLER" "$NPX/fluid-agents/"
+cp -R "$ROOT/notify" "$NPX/fluid-agents/"
+ln -sf ../fluid-agents/install-fluid.sh "$NPX/.bin/fluid-agents"
+cat > "$CP_TEST/bsd/readlink" <<'BSD'
+#!/usr/bin/env bash
+[[ "$1" == -f ]] && { echo "readlink: illegal option -- f" >&2; exit 1; }
+exec /usr/bin/readlink "$@"
+BSD
+chmod +x "$CP_TEST/bsd/readlink"
+( cd "$H" && HOME="$H" PATH="$CP_TEST/bsd:$FAKES:$PATH" bash "$NPX/.bin/fluid-agents" >/dev/null 2>&1 ); rc=$?
+check "npx through a relative link: installs in full" '[[ $rc == 0 ]] && compgen -G "$BASE/notify/*.sample" >/dev/null'
+install_cp uninstall >/dev/null
 
 # ======================================================================
 section "an agent that has gone missing is reported, not retried every minute"
@@ -1303,7 +1369,7 @@ check "and queues the next window"        '[[ $(plists) == 1 ]]'
 
 touch "$CP_TEST/launchctl-refuse"
 reading "$(( T1 + 1200 ))"
-check "a refused agent leaves no plist"   '[[ $(plists) == 0 ]] && grep -q "launchd refused" "$BASE/fluid.log"'
+check "a refused agent leaves only the plan it had" '[[ $(plists) == 1 ]] && grep -q "launchd refused" "$BASE/fluid.log"'
 rm -f "$CP_TEST/launchctl-refuse"
 
 reading "$(( T1 + 1800 ))"

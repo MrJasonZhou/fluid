@@ -658,7 +658,7 @@ cat > "$STAGE/fluid.sh" <<'FLUID_SCRIPT'
 set -u
 umask 077
 
-VERSION="0.3.0"
+VERSION="0.3.1"
 
 BASE="$HOME/.fluid"
 STATE="$BASE/state"
@@ -1516,8 +1516,13 @@ do_warmup() {
         log "[$id] Warmup succeeded output=$(printf '%s' "$output" | tr '\n' ' ' | cut -c1-200)"
 
         # A reading that came in while this ran already planned from the
-        # official reset; an estimate must not replace it
-        if [[ "$(pget "$id" at_job)" != "$planned" && "$(pget "$id" at_reason)" == official-reset ]]; then
+        # official reset; an estimate must not replace it. Unless that reset
+        # came before this warmup (a stale reading): its run finds this one
+        # busy and does nothing
+        local reset
+        reset="$(pget "$id" resets_at)"
+        if [[ "$(pget "$id" at_job)" != "$planned" && "$(pget "$id" at_reason)" == official-reset &&
+              "$reset" =~ ^[0-9]+$ ]] && (( reset > started )); then
             return 0
         fi
 

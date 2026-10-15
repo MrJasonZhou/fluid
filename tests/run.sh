@@ -1040,6 +1040,16 @@ wait_until '[[ -s "$CP_TEST/claude-runs" ]]'
 reading_at "$(( T + 1200 ))"
 wait "$warmer"
 check "a reading during a warmup outlives its estimate" '[[ $(cat "$BASE/state/claude/at_target") == $(( T + 1215 )) && $(cat "$BASE/state/claude/at_reason") == official-reset ]]'
+
+# A stale reading (its reset already past) plans a run that finds this
+# warmup busy and does nothing, so the estimate still has to follow
+: > "$CP_TEST/claude-runs"
+cp_run warmup claude >/dev/null 2>&1 &
+warmer=$!
+wait_until '[[ -s "$CP_TEST/claude-runs" ]]'
+reading_at "$(( $(date +%s) - 3600 ))"
+wait "$warmer"
+check "a stale reading during a warmup leaves the next window planned" '[[ $(cat "$BASE/state/claude/at_reason") == estimated-next-reset && $(cat "$BASE/state/claude/at_target") -gt $(date +%s) && $(our_jobs) == 1 ]]'
 install_cp uninstall >/dev/null
 
 # npx は node_modules/.bin に相対のリンクを置く。readlink -f のない macOS でも

@@ -59,7 +59,7 @@ bash install-fluid.sh
 /fluid:install
 ```
 
-“续跑”用的 hook 由插件自带，所以安装脚本不会再把它写进你的配置；另外还有 `/fluid:status`、`/fluid:anchor` 和 `/fluid:uninstall`。
+“续跑”用的 hook 由插件自带，所以安装脚本不会再把它写进你的配置；另外还有 `/fluid:status`、`/fluid:anchor` 和 `/fluid:uninstall`。在 Claude Code 会加载插件 hooks 模块的环境里（hooks 模块仍在按账号逐步开放），Fluid 直接在 Claude Code 内部读取用量并续跑停下的会话，完全不改 Claude Code 的配置；其他环境则照下文所述包装状态栏。用 `/fluid:status` 可以看到当前用的是哪一种。
 
 对每个带 status line 的助手，安装脚本会包装你现有的那条（显示和原来完全一样），这是它对该助手配置做的唯一改动（Claude Code 另外多一个 hook，见“续跑”），而且每个配置文件都会先备份。Codex 完全不需要配置。重复执行安装脚本是一次干净的升级，而不是装第二份，并且会保留每个助手下一次排好的任务、它的状态，以及你的通知脚本。
 

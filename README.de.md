@@ -59,7 +59,7 @@ Oder als Claude-Code-Plugin, dessen Installer Sie dann in Claude Code selbst sta
 /fluid:install
 ```
 
-Es bringt den Hook für Fortsetzen selbst mit, deshalb trägt der Installer ihn nicht in Ihre Einstellungen ein, und fügt `/fluid:status`, `/fluid:anchor` und `/fluid:uninstall` hinzu.
+Es bringt den Hook für Fortsetzen selbst mit, deshalb trägt der Installer ihn nicht in Ihre Einstellungen ein, und fügt `/fluid:status`, `/fluid:anchor` und `/fluid:uninstall` hinzu. Wo Claude Code das Hooks-Modul des Plugins lädt (Hooks-Module werden noch schrittweise für Konten freigeschaltet), liest Fluid die Nutzungswerte und setzt eine angehaltene Sitzung aus Claude Code selbst heraus fort und lässt die Einstellungen von Claude Code unberührt; andernfalls umhüllt es die Statuszeile wie unten beschrieben. `/fluid:status` zeigt, was verwendet wird.
 
 Für jeden Agenten mit einer Status Line legt sich der Installer um die, die Sie bereits hatten, und die wird genau wie bisher angezeigt; das ist, neben einem Hook für Claude Code (siehe Fortsetzen), die einzige Änderung an den Einstellungen jenes Agenten, und jede Einstellungsdatei wird zuvor gesichert. Codex braucht überhaupt keine Konfiguration. Ein erneuter Lauf ist ein sauberes Upgrade statt einer zweiten Installation und übernimmt für jeden Agenten den nächsten geplanten Lauf, seinen Zustand und Ihren Benachrichtiger.
 

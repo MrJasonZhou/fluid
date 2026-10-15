@@ -25,3 +25,17 @@ jobs:
           for t in timeout gtimeout tac flock; do command -v "$t" || true; done
       # jq ships with both runners; claude, at, launchctl and tmux are faked
       - run: bash tests/run.sh
+
+  # プラグインのフック・モジュール: 最新の Claude Code で検証し、テストする
+  hooks-module:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm install -g @anthropic-ai/claude-code
+      - run: claude --version
+      - run: claude plugin validate .
+      - run: claude plugin test .

@@ -59,7 +59,7 @@ Oppure come plugin di Claude Code, di cui poi avvii l'installatore da dentro Cla
 /fluid:install
 ```
 
-Porta con sé l'hook della Ripresa, quindi l'installatore non lo aggiunge alle tue impostazioni, e aggiunge `/fluid:status`, `/fluid:anchor` e `/fluid:uninstall`.
+Porta con sé l'hook della Ripresa, quindi l'installatore non lo aggiunge alle tue impostazioni, e aggiunge `/fluid:status`, `/fluid:anchor` e `/fluid:uninstall`. Dove Claude Code carica il modulo di hook del plugin (i moduli di hook sono ancora in fase di distribuzione agli account), Fluid legge l'utilizzo e riprende una sessione ferma dall'interno di Claude Code, senza toccare le impostazioni di Claude Code; altrove avvolge la riga di stato come descritto sotto. `/fluid:status` mostra quale dei due è in uso.
 
 Per ogni agente dotato di status line, l'installatore avvolge quella che avevi già, che si vede esattamente come prima; è, insieme a un hook per Claude Code (vedi Ripresa), l'unica modifica alle impostazioni di quell'agente, e ogni file di impostazioni viene salvato prima. Codex non richiede alcuna configurazione. Rieseguire l'installatore è un aggiornamento pulito anziché una seconda copia, e conserva per ogni agente la prossima esecuzione pianificata, il suo stato e il tuo notificatore.
 

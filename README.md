@@ -59,7 +59,7 @@ Or as a Claude Code plugin, whose installer you then run from inside Claude Code
 /fluid:install
 ```
 
-It brings the Resume hook itself, so the installer leaves that out of your settings, and adds `/fluid:status`, `/fluid:anchor` and `/fluid:uninstall`.
+It brings the Resume hook itself, so the installer leaves that out of your settings, and adds `/fluid:status`, `/fluid:anchor` and `/fluid:uninstall`. Where Claude Code loads the plugin's hooks module (hooks modules are still rolling out to accounts), Fluid takes the usage readings and resumes a stopped session from inside Claude Code, and leaves Claude Code's settings untouched; elsewhere it wraps the status line as described below. `/fluid:status` shows which one is in use.
 
 For each agent that has a status line, the installer wraps the one you already had, which keeps showing exactly as before; that, plus one hook for Claude Code (see Resume), is all it changes in that agent's settings, and every settings file is backed up first. Codex needs no configuration at all. Re-running the installer is a clean upgrade rather than a second copy, and it carries over each agent's next scheduled run, its state and your notifier.
 

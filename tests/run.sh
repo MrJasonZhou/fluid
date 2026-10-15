@@ -25,6 +25,10 @@ trap 'rm -rf "$CP_TEST"' EXIT
 # switches to launchd itself
 export FLUID_SCHEDULER=at
 
+# Fluid のフック・モジュールが動いている Claude Code の中からテストを走らせても、
+# その印を持ち込まない。必要な所では各テストが自分で立てる
+unset FLUID_MOD
+
 PASS=0
 FAIL=0
 
@@ -1262,6 +1266,56 @@ check "anchor refuses anything but HH:MM|off" '[[ $rc == 2 && ! -e "$BASE/anchor
 in_home "$ROOT/scripts/entry.sh" anchor 07:30 >/dev/null
 check "anchor takes a time"              '[[ $(cat "$BASE/anchor") == 07:30 ]]'
 check "the plugin hook records the session" '[[ $(jq -r .pane "$BASE/state/claude/pending/p1.json") == %7 ]]'
+install_cp uninstall >/dev/null
+
+# ======================================================================
+section "where the plugin's hooks module runs, Claude Code's settings are left alone"
+
+new_home modplugin
+with_cs
+mkdir -p "$(dirname "$AGYS")"
+printf '{"statusLine":{"type":"command","command":"%s"}}\n' "$FAKES/cs" > "$AGYS"
+before="$(cksum < "$S")"
+out="$(in_home env FLUID_MOD=1 "$ROOT/scripts/entry.sh" install)"
+check "module install: Claude Code settings untouched"  '[[ $(cksum < "$S") == "$before" ]]'
+check "module install: says where readings come from"   '[[ $out == *"readings come from the plugin'"'"'s hooks module"* ]]'
+check "module install: other agents still wrapped"      '[[ $(jq -r .statusLine.command "$AGYS") == "$CP statusline agy" ]]'
+
+T="$(( $(date +%s) + 3600 ))"
+printf '{"rate_limits":{"five_hour":{"used_percentage":33,"resets_at":%s},"seven_day":{"used_percentage":22,"resets_at":%s}}}' "$T" "$(( T + 86400 ))" |
+    cp_run observe claude mod
+check "a module reading plans the next window"          '[[ $(cat "$BASE/state/claude/at_target") == $(( T + 15 )) && $(our_jobs) == 1 ]]'
+check "status names where the readings come from"       '[[ $(cp_run status) == *"Readings      : hooks module, last 20"* ]]'
+
+# 上限で止まった報告: モジュールが再開させるので tmux の記録は作らない
+echo "$$" > "$CP_TEST/tmux-pane-pid"
+printf '{"session_id":"m1","transcript_path":"%s"}' "$H/t.jsonl" |
+    in_home env FLUID_MOD=1 TMUX=/tmp/sock,1,0 TMUX_PANE=%7 "$CP" rate-limit claude
+check "the module's session is not queued for tmux"     '[[ ! -e "$BASE/state/claude/pending/m1.json" ]] && grep -q "the hooks module resumes it" "$BASE/fluid.log"'
+
+make_notifier
+cp_run log claude "Sending continue to the stopped session, attempt 1"
+cp_run notify resume-failed "It is waiting for you."
+check "the module's log lines reach the log"            'grep -q "\[claude\] Sending continue to the stopped session, attempt 1" "$BASE/fluid.log"'
+check "and its alerts the notifier"                     '[[ $(count resume-failed notify-delivered) == 1 ]]'
+
+# 予約した at ジョブに、モジュールの印を持ち込まない
+rm -f "$CP_TEST/at-env"
+printf '{"rate_limits":{"five_hour":{"used_percentage":40,"resets_at":%s}}}' "$(( T + 600 ))" |
+    in_home env FLUID_MOD=1 "$CP" observe claude mod
+check "a queued run carries no module mark"             '[[ -s "$CP_TEST/at-env" ]] && ! grep -q "^FLUID_MOD=" "$CP_TEST/at-env"'
+install_cp uninstall >/dev/null
+check "uninstall leaves Claude Code settings as found"  '[[ $(cksum < "$S") == "$before" && ! -e "$BASE" ]]'
+
+# モジュールが読み込まれていない（ロールアウトの外など）なら、これまでどおり状態栏を包む
+new_home modfallback
+with_cs
+in_home "$ROOT/scripts/entry.sh" install >/dev/null
+check "no module: status line wrapped as before"        '[[ $(jq -r .statusLine.command "$S") == "$CP statusline claude" ]]'
+printf '{}' | cp_run statusline claude >/dev/null
+printf '{"rate_limits":{"five_hour":{"used_percentage":5,"resets_at":%s}}}' "$T" | cp_run statusline claude >/dev/null
+wait_until '[[ -e "$BASE/state/claude/reading_source" ]]'
+check "and its readings are named as the status line's" '[[ $(cp_run status) == *"Readings      : status line"* ]]'
 install_cp uninstall >/dev/null
 
 # ======================================================================

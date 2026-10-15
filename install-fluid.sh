@@ -610,6 +610,14 @@ fi
 
 survey_agents install
 
+# プラグインのフック・モジュールが、このインストーラを起動したセッションで
+# 動いている（FLUID_MOD を立てた）なら、Claude Code の読み取りはそこから届く。
+# そのときは Claude Code の状態栏を包まない
+MOD_READINGS=0
+if [[ "${FLUID_HOOK:-}" == plugin && -n "${FLUID_MOD:-}" ]]; then
+    MOD_READINGS=1
+fi
+
 # 新しいスクリプトはまず一時ディレクトリに書いて検証する。ここで失敗しても、
 # 古いインストールにはまだ何も手を付けていない
 STAGE="$(mktemp -d)"
@@ -647,7 +655,7 @@ cat > "$STAGE/fluid.sh" <<'FLUID_SCRIPT'
 # option) any later version. See the LICENSE file for details.
 set -u
 
-VERSION="0.2.3"
+VERSION="0.3.0"
 
 BASE="$HOME/.fluid"
 STATE="$BASE/state"
@@ -1022,7 +1030,7 @@ submit_job() {
         # 変数も持ち込まない
         output="$(
             cd / || exit 1
-            unset TMUX TMUX_PANE FLUID_IN_STATUSLINE CLAUDECODE \
+            unset TMUX TMUX_PANE FLUID_IN_STATUSLINE FLUID_MOD CLAUDECODE \
                 CLAUDE_CODE_ENTRYPOINT CLAUDE_CODE_SSE_PORT
             printf '%q %q %q\n' "$SELF" "$sub" "$id" |
                 LC_ALL=C at -t "$(fmt_time "$target" '+%Y%m%d%H%M.%S')" 2>&1
@@ -1297,13 +1305,20 @@ check_stall() {
 # ------------------------------------------------------------- observations
 
 # Take one reading from a provider: its own JSON on stdin, normalised through
-# the provider, stored, and the next window scheduled from it.
+# the provider, stored, and the next window scheduled from it. $2 names where
+# it came from (statusline, mod), for status.
 observe() {
-    local id="$1" input parsed key value reset
+    local id="$1" origin="${2:-}" input parsed key value reset
 
     input="$(cat)"
     parsed="$(printf '%s' "$input" | provider_call "$id" parse_limits 2>/dev/null)" || return 0
     [[ -n "$parsed" ]] || return 0
+
+    # 読み取りが最後にどこから、いつ届いたか。status で見えるように
+    if [[ "$parsed" != "{}" ]]; then
+        pset "$id" last_reading "$(date +%s)"
+        [[ -n "$origin" ]] && pset "$id" reading_source "$origin"
+    fi
 
     for key in window_seconds used_percent resets_at long_used_percent long_resets_at; do
         value="$(
@@ -1355,9 +1370,9 @@ statusline() {
     # ponytail: no setsid on macOS; there it only leaves the parent's process
     # group if Claude Code kills the whole group
     if command -v setsid >/dev/null 2>&1; then
-        printf '%s' "$input" | setsid "$SELF" observe "$id" >/dev/null 2>&1 &
+        printf '%s' "$input" | setsid "$SELF" observe "$id" statusline >/dev/null 2>&1 &
     else
-        printf '%s' "$input" | "$SELF" observe "$id" >/dev/null 2>&1 &
+        printf '%s' "$input" | "$SELF" observe "$id" statusline >/dev/null 2>&1 &
     fi
 
     orig_file="$(pstate "$id")/original-statusline-command"
@@ -1645,6 +1660,13 @@ rate_limit() {
     transcript="$(jq -r '.transcript_path // empty' <<< "$input" 2>/dev/null)"
     [[ -n "$session" && -n "$transcript" ]] || return 0
 
+    # Claude Code の中のフック・モジュールが動いているセッション（FLUID_MOD を
+    # 立てる）は、そのモジュールがプロセスの中から再開させる。tmux には打たない
+    if [[ "$id" == claude && -n "${FLUID_MOD:-}" ]]; then
+        log "[$id] Usage limit hit session=$session; the hooks module resumes it"
+        return 0
+    fi
+
     if [[ -z "${TMUX:-}" || -z "${TMUX_PANE:-}" ]]; then
         log "[$id] Usage limit hit session=$session outside tmux; it cannot be resumed from here"
         return 0
@@ -1854,6 +1876,16 @@ show_status() {
             echo "  Scheduled     : none"
         fi
 
+        local last_reading origin
+        last_reading="$(pget "$id" last_reading)"
+        origin="$(pget "$id" reading_source)"
+        case "$origin" in
+            mod)        origin="hooks module" ;;
+            statusline) origin="status line" ;;
+        esac
+        if [[ "$last_reading" =~ ^[0-9]+$ ]]; then
+            echo "  Readings      : ${origin:-unknown}, last $(fmt_time "$last_reading" '+%Y-%m-%d %H:%M:%S')"
+        fi
         echo "  Warmup model  : $(warmup_model "$id" | sed 's/^$/(agent default)/')"
         if provider_can "$id" resume; then
             echo "  Resume        : $(( $(find "$dir/pending" -name '*.json' 2>/dev/null | wc -l) )) session(s) stopped on a limit"
@@ -1977,7 +2009,7 @@ case "${1:-}" in
         statusline "${2:-$(default_provider)}"
         ;;
     observe)
-        observe "${2:-$(default_provider)}"
+        observe "${2:-$(default_provider)}" "${3:-}"
         ;;
     warmup)
         do_warmup "${2:-$(default_provider)}"
@@ -2012,12 +2044,21 @@ case "${1:-}" in
     notify-test)
         notify_test
         ;;
+    # フック・モジュールから: ログに一行、通知を一つ
+    log)
+        log "[${2:-}] ${3:-}"
+        ;;
+    notify)
+        log "Notify event=${2:-} ${3:-}"
+        notify "${2:-}" "${3:-}" || true
+        ;;
     version)
         echo "$VERSION"
         ;;
     *)
         echo "Usage: $0 {statusline|observe|warmup|scheduled|rate-limit|resume} [provider]" >&2
         echo "       $0 {reschedule|scheduler-check|status|providers|notify-test|version}" >&2
+        echo "       $0 log <provider> <message> | notify <event> <message>" >&2
         echo "       $0 anchor [HH:MM|off]" >&2
         echo "       $0 model [agent [name|auto|default]]" >&2
         exit 2
@@ -2229,6 +2270,7 @@ fi
 # Inside another program's chain, removal kept the command we render instead.
 for _id in $(wrapped_agents); do
     in_chain "$_id" && continue
+    [[ "$_id" == claude ]] && (( MOD_READINGS )) && continue
     _file="$(agent_settings "$_id")" || continue
     [[ -f "$_file" ]] || continue
 
@@ -2246,6 +2288,7 @@ unset _id _file _current
 # reading it is handling.
 for _id in $(wrapped_agents); do
     in_chain "$_id" && continue
+    [[ "$_id" == claude ]] && (( MOD_READINGS )) && continue
     _file="$(agent_settings "$_id")" || continue
     [[ -f "$_file" ]] || continue
 
@@ -2292,6 +2335,9 @@ echo "Fluid installed."
 if (( SCHEDULER_RC == 1 )); then
     echo "Warning: atd is not running, so nothing Fluid schedules will run." >&2
     echo "         Start it with: sudo systemctl enable --now atd" >&2
+fi
+if (( MOD_READINGS )); then
+    echo "Claude Code's readings come from the plugin's hooks module; its status line was left as it is."
 fi
 if [[ -n "$CHAINED" ]]; then
     echo "A status line belonging to another program already calls Fluid; it was left as it is:"

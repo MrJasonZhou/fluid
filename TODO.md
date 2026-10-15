@@ -16,10 +16,29 @@ and of the effect on running sessions and jobs found (launchd PATH, the at
 working directory, locks held past their use, uninstall racing a run in
 progress, settings behind a symlink, and more; see the 0.2.1 commits), and 0.2.3
 stopped a status line killed mid-refresh from leaving half-written at jobs
-behind; nothing else has been started. Code is referred to by
+behind, and 0.3.0 gave the plugin a hooks module: where Claude Code loads it,
+readings and resume come from inside Claude Code and its settings are left
+alone, with the status line wrapper kept for everywhere else; nothing else has
+been started. Code is referred to by
 function name rather than line number, since lines move.
 
 ## Features
+
+### The hooks module (0.3.0)
+
+Installed plugins' hooks modules load only where Claude Code's rollout flag
+`tengu_plugin_hooks_modules` is on for the account; elsewhere the plugin falls
+back to the status line wrapper and the tmux backstop, decided by whether the
+module set `FLUID_MOD` in the session that ran `/fluid:install`. Two things
+are open:
+
+- An install made while the module did not load keeps the wrapper after the
+  rollout reaches the account, until `/fluid:install` is run again. Readings
+  then arrive twice, which is harmless.
+- Resume from inside Claude Code is tested against the engine's test kit, not
+  yet against a real usage limit. `prompt.submit` with `asUser` sends
+  `continue` as the person would; the draft in the prompt box is checked
+  first, so nothing is mixed into what someone is typing.
 
 ### Medium priority
 

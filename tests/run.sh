@@ -51,6 +51,13 @@ if [[ "$1" == -c ]]; then
     cat "$q/$2" 2>/dev/null
     exit
 fi
+# 本物の at と同じく、提出時の作業ディレクトリと環境をジョブと一緒に記録する
+pwd > "$CP_TEST/at-cwd"
+env > "$CP_TEST/at-env"
+if [[ -e "$CP_TEST/at-refuse" ]]; then
+    echo "Can't open /var/run/atd.pid to signal atd. No atd running?" >&2
+    exit 1
+fi
 last="$(ls "$q" | sort -n | tail -1)"
 n=$(( ${last:-0} + 1 ))
 cat > "$q/$n"
@@ -66,6 +73,7 @@ EOF
 
 cat > "$FAKES/atrm" <<'EOF'
 #!/usr/bin/env bash
+[[ -e "$CP_TEST/at-refuse" ]] && exit 1
 rm -f "$CP_TEST/queue/$1"
 EOF
 
@@ -96,6 +104,10 @@ EOF
 cat > "$FAKES/codex" <<'EOF'
 #!/usr/bin/env bash
 echo "$*" >> "$CP_TEST/codex-runs"
+case "$(cat "$CP_TEST/codex-mode" 2>/dev/null)" in
+    # 終了後もバックグラウンドに子プロセスを残すエージェント
+    child) sleep 5 </dev/null >/dev/null 2>&1 & ;;
+esac
 echo codex-ok
 EOF
 
@@ -203,7 +215,7 @@ new_home() {
     BASE="$H/.fluid"
     CP="$BASE/fluid.sh"
     ORIGFILE="$BASE/state/claude/original-statusline-command"
-    rm -f "$QUEUE"/* "$CP_TEST"/claude-mode "$CP_TEST"/claude-runs "$CP_TEST"/claude-args "$CP_TEST"/codex-runs "$CP_TEST"/agy-runs "$CP_TEST"/notify-*
+    rm -f "$QUEUE"/* "$CP_TEST"/claude-mode "$CP_TEST"/codex-mode "$CP_TEST"/claude-runs "$CP_TEST"/claude-args "$CP_TEST"/codex-runs "$CP_TEST"/agy-runs "$CP_TEST"/notify-*
     AGYS="$H/.gemini/antigravity-cli/settings.json"
     echo up > "$CP_TEST/atd"
 }
@@ -656,6 +668,98 @@ check "a run clears the stall, says so"     '[[ ! -e "$BASE/state/notified-stall
 check "status shows the last run"           '[[ $(cp_run status) == *"Last run      : 20"* ]]'
 
 # ======================================================================
+section "a slow stall check never holds up the status line"
+
+# flock のない macOS と同じ mkdir のロックを Linux でも通すための PATH
+NOFLOCK="$CP_TEST/noflock"
+mkdir -p "$NOFLOCK"
+for _f in /usr/local/bin/* /usr/bin/* /bin/*; do
+    _n="$(basename "$_f")"
+    [[ "$_n" == flock || -e "$NOFLOCK/$_n" ]] || ln -s "$_f" "$NOFLOCK/$_n"
+done
+
+for LOCKS in flock mkdir; do
+    new_home "stalllock-$LOCKS"
+    with_cs
+    install_cp >/dev/null
+    if [[ "$LOCKS" == flock ]]; then LPATH="$FAKES:$PATH"; else LPATH="$FAKES:$NOFLOCK"; fi
+
+    # 遅い notifier: 停止チェックが走っている間を長く取る
+    cat > "$BASE/notify.sh" <<'EOF'
+#!/usr/bin/env bash
+sleep 3
+echo "$CP_EVENT" >> "$CP_TEST/notify-delivered"
+EOF
+    chmod +x "$BASE/notify.sh"
+
+    stall_reading() {
+        printf '{"rate_limits":{"five_hour":{"used_percentage":10,"resets_at":%s}}}' "$(( $(date +%s) + 3600 ))" |
+            HOME="$H" PATH="$LPATH" tmo "$1" "$CP" observe claude >/dev/null 2>&1
+    }
+
+    # at が予約を受け付けず、期限切れの予約も取り消せない（atd の spool に
+    # 書けないなど）。読み取りのたびに予約を試みて失敗し、停止チェックが起きる
+    echo $(( $(date +%s) - 400 )) > "$BASE/state/claude/at_target"
+    echo "$CP scheduled" > "$QUEUE/5"
+    echo 5 > "$BASE/state/claude/at_job"
+    touch "$CP_TEST/at-refuse"
+
+    stall_reading 10
+    wait_until '[[ -e "$BASE/state/stall_checked_at" ]]'
+    stall_reading 2; rc=$?
+    check "$LOCKS: the next reading is not kept waiting" '[[ $rc == 0 ]]'
+
+    # 生きている別のプロセスが持つロックを、停止チェックの終わりに消してはならない
+    sleep 30 &
+    holder=$!
+    mkdir -p "$BASE/state/claude/schedule.lock.d"
+    echo "$holder" > "$BASE/state/claude/schedule.lock.d/pid"
+    # notifier は 3 秒かかり、wait_until 一回の上限と同じなので二回まで待つ
+    wait_until '[[ $(count scheduler-stalled notify-delivered) == 1 ]]' ||
+        wait_until '[[ $(count scheduler-stalled notify-delivered) == 1 ]]'
+    sleep 0.3
+    check "$LOCKS: the stall check ran"                   '[[ $(count scheduler-stalled notify-delivered) == 1 ]]'
+    check "$LOCKS: and left others' locks alone"          '[[ -e "$BASE/state/claude/schedule.lock.d/pid" ]]'
+    kill "$holder" 2>/dev/null
+    wait "$holder" 2>/dev/null
+    rm -rf "$BASE/state/claude/schedule.lock.d" "$CP_TEST/at-refuse"
+    install_cp uninstall >/dev/null
+done
+
+# ======================================================================
+section "processes an agent leaves behind do not hold the warmup lock"
+
+new_home warmlock
+echo '{}' > "$S"
+install_cp >/dev/null
+
+# エージェントが残した子プロセスが、次の warmup を締め出さない
+echo child > "$CP_TEST/codex-mode"
+cp_run warmup codex >/dev/null 2>&1
+cp_run warmup codex >/dev/null 2>&1
+check "a child left behind does not skip the next warmup" '[[ $(( $(wc -l < "$CP_TEST/codex-runs") )) == 2 ]]'
+install_cp uninstall >/dev/null
+
+# ======================================================================
+section "a queued run does not depend on the session that queued it"
+
+new_home atenv
+with_cs
+install_cp >/dev/null
+PROJ="$CP_TEST/project-atenv"
+mkdir -p "$PROJ"
+rm -f "$CP_TEST/at-cwd" "$CP_TEST/at-env"
+( cd "$PROJ" &&
+  printf '{"rate_limits":{"five_hour":{"used_percentage":10,"resets_at":%s}}}' "$(( $(date +%s) + 3600 ))" |
+      in_home env TMUX=/tmp/tmux-0/default,1,0 TMUX_PANE=%3 CLAUDECODE=1 FOO_KEEP=1 \
+          "$CP" statusline claude >/dev/null )
+rm -rf "$PROJ"
+check "queued from /, not the session's directory" '[[ $(our_jobs) == 1 && $(cat "$CP_TEST/at-cwd") == / ]]'
+check "without the session's own variables"        '! grep -Eq "^(TMUX|TMUX_PANE|CLAUDECODE|FLUID_IN_STATUSLINE)=" "$CP_TEST/at-env"'
+check "but with the rest of the environment"       'grep -qx "FOO_KEEP=1" "$CP_TEST/at-env"'
+install_cp uninstall >/dev/null
+
+# ======================================================================
 section "a second agent keeps its own window, schedule and failures"
 
 new_home multi
@@ -1024,12 +1128,15 @@ check "runs fluid.sh scheduled claude"    'grep -q "<string>$CP</string>" "$P" &
 reading "$(( T1 + 600 ))"
 check "a new reading replaces it"         '[[ $(plists) == 1 && ! -e $P ]] && grep -q "^remove io.github.mrjasonzhou.fluid.$job$" "$CP_TEST/launchctl-log"'
 
-# Run the agent the way launchd would: its own arguments, in order
+# Run the agent the way launchd would: its own arguments, in order, and only
+# the environment the plist gives it
 P="$(ls "$AGENTS"/*.plist | head -1)"
 ARGV=()
-while IFS= read -r line; do ARGV+=("$line"); done < <(sed -n 's:.*<string>\(.*\)</string>.*:\1:p' "$P" | sed 1d)
+while IFS= read -r line; do ARGV+=("$line"); done < <(sed -n '/<key>ProgramArguments/,/<\/array>/s:.*<string>\(.*\)</string>.*:\1:p' "$P")
+JOBPATH="$(sed -n 's:.*<key>PATH</key><string>\(.*\)</string>.*:\1:p' "$P")"
+check "the plist carries the PATH it was queued with" '[[ $JOBPATH == "$FAKES:"* ]]'
 rm -f "$CP_TEST/claude-runs"
-mac "${ARGV[@]}"
+env -i HOME="$H" CP_TEST="$CP_TEST" PATH="${JOBPATH:-/usr/bin:/bin:/usr/sbin:/sbin}" "${ARGV[@]}"
 check "the agent deletes itself and warms up" '[[ ! -e $P && $(count run claude-runs) == 1 ]]'
 check "and queues the next window"        '[[ $(plists) == 1 ]]'
 

@@ -1958,6 +1958,12 @@ KEEP=("$(basename "$STATE")" "$(basename "$NOTIFY")" "$(basename "$ANCHOR")" "fl
 REMOVED=1
 remove_installation "${KEEP[@]}"
 
+# 0.3.0 で tmux 経由の再開はなくなった。それまでの版が state/ に残した記録
+# （止まったセッション、resume の予約、そのロック）は、もう誰も読まない
+rm -rf "$STATE"/*/pending "$STATE"/*/resume_job "$STATE"/*/resume_target \
+    "$STATE"/*/resume.lock "$STATE"/*/resume.lock.d \
+    "$STATE"/*/resume-job.lock "$STATE"/*/resume-job.lock.d
+
 mkdir -p "$BASE" "$STATE" "$PROVIDERS"
 
 mv "$STAGE/fluid.sh" "$BIN"

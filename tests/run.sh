@@ -632,6 +632,16 @@ check "old job replaced"           '[[ ! -e "$QUEUE/7" && $(our_jobs) == 1 ]]'
 check "same target re-armed"       '[[ $(cat "$BASE/state/claude/at_target") == "$target" ]]'
 check "same reason kept"           '[[ $(cat "$BASE/state/claude/at_reason") == pending-rate-limit ]]'
 
+# 0.2.x の tmux 再開が残した記録は、アップグレードで片付ける
+mkdir -p "$BASE/state/claude/pending" "$BASE/state/claude/resume.lock.d"
+echo '{"session":"old"}' > "$BASE/state/claude/pending/old.json"
+echo 9 > "$BASE/state/claude/resume_job"
+echo "$target" > "$BASE/state/claude/resume_target"
+: > "$BASE/state/claude/resume-job.lock"
+install_cp >/dev/null
+check "old resume records cleared" '[[ ! -e "$BASE/state/claude/pending" && ! -e "$BASE/state/claude/resume_job" && ! -e "$BASE/state/claude/resume_target" && ! -e "$BASE/state/claude/resume.lock.d" && ! -e "$BASE/state/claude/resume-job.lock" ]]'
+check "and nothing else of the state" '[[ $(cat "$BASE/state/claude/at_target") == "$target" && $(cat "$BASE/state/claude/failure_count") == 2 ]]'
+
 echo $((now - 600)) > "$BASE/state/claude/at_target"
 install_cp >/dev/null
 t="$(cat "$BASE/state/claude/at_target")"

@@ -1,8 +1,8 @@
 ---
-description: Install or upgrade Fluid (reads usage through its hooks module or the status line, schedules windows, sets up resume)
+description: Install or upgrade Fluid (schedules windows; Claude Code's readings and resume come from the plugin's hooks module)
 allowed-tools: ["Bash(${CLAUDE_PLUGIN_ROOT}/scripts/entry.sh:*)"]
 ---
 
 !`"${CLAUDE_PLUGIN_ROOT}/scripts/entry.sh" install 2>&1`
 
-Present the installer output briefly. Where it says Claude Code's readings come from the plugin's hooks module, it left `~/.claude/settings.json` untouched; otherwise it edited that file only to wrap the status line (a backup sits next to it). The resume hook comes with this plugin. If it warns that atd is not running, tell the user to run `sudo systemctl enable --now atd`. For alerts, point them at the samples in `~/.fluid/notify/`. Do not run anything else.
+Present the installer output briefly. It never edits `~/.claude/settings.json` beyond taking out what versions before 0.3.0 put there; Claude Code's readings and resume come from this plugin's hooks module. If it says the hooks module did not load, explain that windows are kept on estimated resets until it does. If it warns that atd is not running, tell the user to run `sudo systemctl enable --now atd`. For alerts, point them at the samples in `~/.fluid/notify/`. Do not run anything else.

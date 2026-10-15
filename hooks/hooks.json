@@ -1,19 +1,5 @@
 {
-  "description": "Fluid: hand Claude Code's usage readings to Fluid and resume a session stopped on a usage limit, from inside Claude Code (hooks module), or report the stop so the tmux backstop can (StopFailure hook) where the module does not load. Does nothing until /fluid:install has run.",
-  "hooks": {
-    "StopFailure": [
-      {
-        "matcher": "rate_limit",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/entry.sh\" rate-limit",
-            "timeout": 10
-          }
-        ]
-      }
-    ]
-  },
+  "description": "Fluid: hand Claude Code's usage readings to Fluid and resume a session stopped on a usage limit, from inside Claude Code. Does nothing until /fluid:install has run.",
   "modules": [
     "./register.ts"
   ]

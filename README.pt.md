@@ -15,7 +15,7 @@ Claude Code, Codex e Antigravity medem uma assinatura do mesmo jeito: uma janela
 
 | Agente | De onde vêm os limites | Mudanças na configuração dele |
 |---|---|---|
-| Claude Code | a status line dele, a cada atualização | uma entrada de status line, um hook |
+| Claude Code | o módulo de hooks do plugin Fluid, quando o uso muda | nenhuma |
 | Codex | os logs de sessão dele, lidos quando preciso | nenhuma |
 | Antigravity | a status line dele, a cada atualização | uma entrada de status line |
 
@@ -31,11 +31,11 @@ Cada agente tem a própria janela, o próprio agendamento e os próprios avisos;
 
 ## Requisitos
 
-Linux ou macOS, com `jq` e pelo menos um entre `claude`, `codex` e `agy`. No Linux, as execuções são agendadas com `at`, então o `atd` precisa estar rodando; no macOS quem cuida disso é o launchd, sem nada para configurar. A Retomada precisa de `tmux`. No Windows, rode o Claude Code dentro do WSL com o systemd ativado, para que o atd possa iniciar.
+Linux ou macOS, com `jq` e pelo menos um entre `claude`, `codex` e `agy`. Para o Claude Code, instale o Fluid como plugin (abaixo): as leituras dele e a Retomada vêm do módulo de hooks do plugin. No Linux, as execuções são agendadas com `at`, então o `atd` precisa estar rodando; no macOS quem cuida disso é o launchd, sem nada para configurar. No Windows, rode o Claude Code dentro do WSL com o systemd ativado, para que o atd possa iniciar.
 
 ```bash
 sudo systemctl enable --now atd   # Linux
-brew install jq tmux              # macOS
+brew install jq                   # macOS
 ```
 
 ## Instalação
@@ -59,9 +59,9 @@ Ou como plugin do Claude Code, cujo instalador você roda depois de dentro do pr
 /fluid:install
 ```
 
-Ele já traz o hook da Retomada, então o instalador não o põe nas suas configurações, e adiciona `/fluid:status`, `/fluid:anchor` e `/fluid:uninstall`. Onde o Claude Code carrega o módulo de hooks do plugin (os módulos de hooks ainda estão sendo liberados para as contas), o Fluid lê o uso e retoma uma sessão parada de dentro do próprio Claude Code, sem mexer nas configurações do Claude Code; nos demais casos, ele envolve a linha de status como descrito abaixo. `/fluid:status` mostra qual está em uso.
+Ele adiciona `/fluid:status`, `/fluid:anchor` e `/fluid:uninstall`, e um módulo de hooks que roda dentro do Claude Code: ele passa ao Fluid as leituras de uso e retoma uma sessão parada (veja Retomada), sem mexer nas configurações do Claude Code. Os módulos de hooks ainda estão sendo liberados para as contas. Onde o módulo não carrega, ou sem o plugin, as janelas do Claude Code continuam sendo mantidas abertas, só com base nos horários de reinício estimados, e o instalador avisa. `/fluid:status` mostra de onde vêm as leituras.
 
-Para cada agente que tem status line, o instalador envolve a que você já tinha, que continua aparecendo exatamente como antes; é, junto com um hook para o Claude Code (veja Retomada), a única mudança nas configurações daquele agente, e todo arquivo de configuração é salvo antes. O Codex não precisa de configuração alguma. Rodar o instalador de novo é uma atualização limpa, não uma segunda cópia, e preserva para cada agente a próxima execução agendada, o estado dela e o seu notificador.
+Para o Antigravity, o instalador envolve a status line que você já tinha, que continua aparecendo exatamente como antes; essa é a única mudança nas configurações dele, e cada arquivo de configuração ganha um backup antes. Codex e Claude Code não precisam de configuração nenhuma. Rodar o instalador de novo é uma atualização limpa, não uma segunda cópia, e mantém para cada agente a próxima execução agendada, o estado dele e o seu notificador. Versões anteriores à 0.3.0 também envolviam a status line do Claude Code e adicionavam um hook às configurações dele: desinstale uma vez (abaixo) antes de instalar o plugin, e os dois saem.
 
 ## Uso
 
@@ -97,9 +97,9 @@ Abrir uma janela custa um pedido, então o Fluid o mantém o menor possível: o 
 
 ## Retomada
 
-O Claude Code retoma uma sessão sozinho quando um limite de uso é zerado ("Continue automatically at usage limit" em `/config`). Às vezes isso não acontece — uma tecla apertada sem querer cancelou a contagem regressiva, ou ela nunca começou — e a sessão fica parada até você perceber. O Fluid é a rede de segurança: anota cada sessão que para num limite e, três minutos depois de zerar, olha de novo. Se ela ainda estiver parada, digita `continue` no pane tmux dela.
+O Claude Code retoma uma sessão sozinho quando um limite de uso é zerado ("Continue automatically at usage limit" em `/config`). Às vezes isso não acontece — uma tecla apertada sem querer cancelou a contagem regressiva, ou ela nunca começou — e a sessão fica parada até você perceber. O Fluid é a rede de segurança: o módulo de hooks dele anota uma sessão que para num limite e, três minutos depois de zerar, olha de novo. Se ela ainda estiver parada, envia `continue`, como você faria.
 
-Fora isso, não se mete. Nada é digitado se o Claude Code ou você já continuaram, se você cancelou a contagem com Esc, ou se o pane agora roda outra coisa; tenta no máximo duas vezes e depois avisa você. Uma sessão fora do tmux não tem onde receber texto, então só fica registrada no log.
+No resto do tempo, ele não se mete. Nada é enviado se o Claude Code ou você já continuaram, ou se há algo digitado pela metade na caixa de entrada; ele tenta no máximo duas vezes e depois avisa você. Isso precisa do plugin, num Claude Code que carregue o módulo de hooks dele.
 
 ## Avisos
 
@@ -112,7 +112,7 @@ O Fluid fica quieto enquanto nada precisa de você, e informa seis coisas:
 | **Agendador parado** | Uma execução agendada está muito atrasada, então nenhuma janela está sendo mantida aberta; geralmente o `atd` não está rodando |
 | **De volta ao normal** | Ele se recuperou de qualquer um dos problemas acima |
 | **Modelo de warm-up sumiu** | O modelo com que um agente era aquecido não existe mais, então a partir de agora usa-se o padrão dele |
-| **Não retomada** | Uma sessão continuava parada depois que o limite de uso zerou, e digitar `continue` também não a fez andar |
+| **Não retomada** | Uma sessão continuava parada depois que o limite de uso zerou, e enviar `continue` também não a fez andar |
 
 Cada um é anunciado uma única vez por agente, não a cada nova tentativa: um problema durante a noite custa uma só mensagem. Uma falha que se resolve sozinha não custa nenhuma: que um agente está desconectado só é avisado depois que uma tentativa posterior também falha. Os limites de uso em si nunca são anunciados: são rotina, e os agentes, ou o Fluid por trás deles, retomam depois deles.
 

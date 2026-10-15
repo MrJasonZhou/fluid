@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Fluid - the fluid plugin's one entry point. Its commands and its
-# hook call this file and nothing else; it hands over to the installer that
-# ships beside it, or to the script that installer put in ~/.fluid.
+# Fluid - the fluid plugin's one entry point. Its commands call this file
+# and nothing else; it hands over to the installer that ships beside it, or
+# to the script that installer put in ~/.fluid.
 set -u
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -15,7 +15,7 @@ installed() {
 
 case "${1:-}" in
     install)
-        # The plugin carries the StopFailure hook, so settings.json does not need it too
+        # Claude Code's readings come from the plugin's hooks module
         FLUID_HOOK=plugin exec bash "$root/install-fluid.sh" install
         ;;
     uninstall)
@@ -32,13 +32,8 @@ case "${1:-}" in
         fi
         installed && exec "$cp" anchor ${2:+"$2"}
         ;;
-    rate-limit)
-        # The hook: a no-op until Fluid is installed
-        [[ -x "$cp" ]] && exec "$cp" rate-limit claude
-        cat >/dev/null
-        ;;
     *)
-        echo "Usage: $0 {install|uninstall|status|anchor [HH:MM|off]|rate-limit}" >&2
+        echo "Usage: $0 {install|uninstall|status|anchor [HH:MM|off]}" >&2
         exit 2
         ;;
 esac

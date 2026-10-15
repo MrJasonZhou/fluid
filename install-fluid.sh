@@ -28,16 +28,17 @@ agent_settings() {
 }
 
 # 状態栏を包むことのあるエージェントすべて。取り除くときはこちらを使う:
-# エージェント本体が PATH から見えなくなっても、設定に残した痕跡は消せるように
+# エージェント本体が PATH から見えなくなっても、設定に残した痕跡は消せるように。
+# Claude Code is still listed so that what versions before 0.3.0 wrote into
+# its settings comes out again; it is no longer wrapped (see wrapped_agents).
 known_agents() {
     printf '%s\n' claude agy
 }
 
+# Agents whose status line gets wrapped. Claude Code's readings come from the
+# plugin's hooks module instead, so its settings are never edited.
 wrapped_agents() {
-    local id
-    for id in $(known_agents); do
-        command -v "$id" >/dev/null 2>&1 && printf '%s\n' "$id"
-    done
+    command -v agy >/dev/null 2>&1 && printf '%s\n' agy
     return 0
 }
 
@@ -595,28 +596,14 @@ case "$(uname -s)" in
         ;;
 esac
 
-if [[ -z "$(wrapped_agents)" ]] && ! command -v codex >/dev/null 2>&1; then
+if [[ -z "$(wrapped_agents)" ]] && ! command -v codex >/dev/null 2>&1 &&
+   ! command -v claude >/dev/null 2>&1; then
     echo "None of the agents Fluid knows about are installed here." >&2
     echo "Looked for: claude, codex, agy" >&2
     exit 1
 fi
 
-mkdir -p "$HOME/.claude"
-
-# Claude Code may not have written its settings yet
-if command -v claude >/dev/null 2>&1 && [[ ! -f "$(agent_settings claude)" ]]; then
-    printf '{}\n' > "$(agent_settings claude)"
-fi
-
 survey_agents install
-
-# プラグインのフック・モジュールが、このインストーラを起動したセッションで
-# 動いている（FLUID_MOD を立てた）なら、Claude Code の読み取りはそこから届く。
-# そのときは Claude Code の状態栏を包まない
-MOD_READINGS=0
-if [[ "${FLUID_HOOK:-}" == plugin && -n "${FLUID_MOD:-}" ]]; then
-    MOD_READINGS=1
-fi
 
 # 新しいスクリプトはまず一時ディレクトリに書いて検証する。ここで失敗しても、
 # 古いインストールにはまだ何も手を付けていない
@@ -667,9 +654,6 @@ SELF="$BASE/fluid.sh"
 
 DEFAULT_WINDOW=18000
 STALL_GRACE=300
-RESUME_GRACE=180
-RESUME_VERIFY=90
-
 mkdir -p "$STATE"
 
 # アンインストールは state/ ごと消す。その後も走り続けていた実行が、
@@ -749,10 +733,6 @@ default_unknown_model() {
     grep -Eqi 'unrecognized_model|unknown model|model.*(does not exist|may not exist|not found|described by this version)'
 }
 
-# Without a way to read a session, never claim it is stuck
-default_stuck() {
-    return 1
-}
 
 default_parse_limits() {
     cat >/dev/null
@@ -1363,7 +1343,7 @@ statusline() {
     export FLUID_IN_STATUSLINE=1
 
     input="$(cat)"
-    # Claude Code kills a status line still running when the next refresh
+    # Agents kill a status line still running when the next refresh
     # comes. Killed inside `at`, observe left a half-written job that never
     # runs and is never removed (435 of them on one machine), so it runs on
     # its own and the status line does not wait for it.
@@ -1562,255 +1542,6 @@ scheduled() {
     do_warmup "$id" || true
 }
 
-# ------------------------------------------------------------------- resume
-#
-# Agents pick a session back up after a usage limit themselves, and that
-# always goes first. This is the backstop for when they do not: the countdown
-# was cancelled by a stray key, or never started. A provider with `resume`
-# reports a session that stopped on a limit (its `stuck` function reads the
-# session's transcript), and if that session is still stopped RESUME_GRACE
-# seconds after the reset, Fluid types `continue` into its tmux pane.
-
-# When a process started, in clock ticks since boot. Together with the pid it
-# names one process, even once the pid has been reused.
-process_start() {
-    local stat
-
-    [[ "${1:-}" =~ ^[0-9]+$ ]] || return 0
-    # No /proc on macOS; ps gives the start time as text, which compares as well
-    if [[ ! -d /proc/self ]]; then
-        ps -o lstart= -p "$1" 2>/dev/null
-        return 0
-    fi
-
-    stat="$(cat "/proc/$1/stat" 2>/dev/null)" || return 0
-
-    # Field 22. The command name in field 2 may hold spaces, so cut past ") "
-    stat="${stat##*) }"
-    awk '{print $20}' <<< "$stat"
-}
-
-# The foreground process group of the terminal a pane's first process sits
-# on: in practice the agent the user is running in that pane.
-foreground_pgid() {
-    [[ "${1:-}" =~ ^[0-9]+$ ]] || return 0
-    ps -o tpgid= -p "$1" 2>/dev/null | tr -d ' '
-}
-
-# When to look again at a session stopped on a limit: once the window that
-# stopped it has reset, and the agent has had its chance to continue
-resume_due() {
-    local id="$1" now reset
-    now="$(date +%s)"
-
-    if is_long_limited "$id"; then
-        reset="$(pget "$id" long_resets_at)"
-    else
-        reset="$(pget "$id" resets_at)"
-    fi
-
-    # ponytail: an unknown reset just looks again after the grace; the
-    # attempt cap in resume() stops that from repeating forever
-    [[ "$reset" =~ ^[0-9]+$ ]] && (( reset > now )) || reset="$now"
-    printf '%s\n' "$((reset + RESUME_GRACE))"
-}
-
-# One resume job per provider, at the earliest time any session needs it. A
-# job already queued for earlier is kept, and re-arms for the rest when it runs.
-arm_resume() {
-    local dir rc=0
-    installed || return 0
-    dir="$(pstate "$1")"
-    mkdir -p "$dir"
-
-    # 上限に達したセッションは同時にいくつも報告される。同時に差し替えると
-    # 追跡されない予約が残るので、ここは一つずつ
-    take_lock 5 "$dir/resume-job.lock"
-    arm_resume_locked "$@" || rc=$?
-    release_lock 5 "$dir/resume-job.lock"
-    return "$rc"
-}
-
-arm_resume_locked() {
-    local id="$1" target="$2" now job old
-    now="$(date +%s)"
-    (( target > now )) || target=$((now + 5))
-
-    job="$(pget "$id" resume_job)"
-    old="$(pget "$id" resume_target)"
-
-    if [[ "$old" =~ ^[0-9]+$ ]] && (( old > now && old <= target )) && job_exists "$job"; then
-        return 0
-    fi
-    remove_job "$job"
-
-    job="$(submit_job "$target" resume "$id")" || return 1
-    pset "$id" resume_job "$job"
-    pset "$id" resume_target "$target"
-}
-
-# Hook: a turn in this agent stopped on a usage limit. Remember which tmux pane
-# the session runs in and which process holds it, so nothing is ever typed
-# into a pane that has since moved on to something else.
-rate_limit() {
-    local id="$1" input session transcript file dir attempts=0
-    input="$(cat)"
-
-    session="$(jq -r '.session_id // empty' <<< "$input" 2>/dev/null)"
-    transcript="$(jq -r '.transcript_path // empty' <<< "$input" 2>/dev/null)"
-    [[ -n "$session" && -n "$transcript" ]] || return 0
-
-    # Claude Code の中のフック・モジュールが動いているセッション（FLUID_MOD を
-    # 立てる）は、そのモジュールがプロセスの中から再開させる。tmux には打たない
-    if [[ "$id" == claude && -n "${FLUID_MOD:-}" ]]; then
-        log "[$id] Usage limit hit session=$session; the hooks module resumes it"
-        return 0
-    fi
-
-    if [[ -z "${TMUX:-}" || -z "${TMUX_PANE:-}" ]]; then
-        log "[$id] Usage limit hit session=$session outside tmux; it cannot be resumed from here"
-        return 0
-    fi
-
-    local socket="${TMUX%%,*}" pane="$TMUX_PANE" pane_pid fg
-    pane_pid="$(tmux -S "$socket" display-message -p -t "$pane" '#{pane_pid}' 2>/dev/null)"
-    fg="$(foreground_pgid "$pane_pid")"
-
-    installed || return 0
-    dir="$(pstate "$id")/pending"
-    mkdir -p "$dir"
-    file="$dir/$(printf '%s' "$session" | tr -c 'A-Za-z0-9._-' '_').json"
-
-    # The same session hitting the limit again, after we typed continue too
-    # early, keeps its count so it cannot be retried forever
-    [[ -f "$file" ]] && attempts="$(jq -r '.attempts // 0' "$file" 2>/dev/null)"
-    [[ "$attempts" =~ ^[0-9]+$ ]] || attempts=0
-
-    jq -n --arg session "$session" --arg transcript "$transcript" \
-        --arg socket "$socket" --arg pane "$pane" --arg pane_pid "$pane_pid" \
-        --arg fg "$fg" --arg fg_start "$(process_start "$fg")" \
-        --argjson due "$(resume_due "$id")" --argjson attempts "$attempts" \
-        --argjson hit "$(date +%s)" \
-        '{session: $session, transcript: $transcript, socket: $socket, pane: $pane,
-          pane_pid: $pane_pid, fg: $fg, fg_start: $fg_start, due: $due, attempts: $attempts,
-          hit: $hit, sent: 0, deferred: 0}' \
-        > "$file.tmp.$$" && mv "$file.tmp.$$" "$file"
-
-    log "[$id] Usage limit hit session=$session pane=$pane; checking again at $(fmt_time "$(jq -r .due "$file")" '+%Y-%m-%d %H:%M:%S')"
-    arm_resume "$id" "$(jq -r .due "$file")"
-}
-
-resume() {
-    local id="$1" dir file now
-    installed || return 0
-    dir="$(pstate "$id")"
-    mkdir -p "$dir/pending"
-
-    take_lock 6 "$dir/resume.lock"
-
-    shopt -s nullglob
-    for file in "$dir"/pending/*.json; do
-        local session transcript socket pane pane_pid fg fg_start due attempts current fields
-        local hit sent deferred in_mode activity
-        now="$(date +%s)"
-
-        # hit/sent/deferred は 0.2.1 から。古い記録では 0 として読む
-        if ! fields="$(jq -er '@sh "session=\(.session) transcript=\(.transcript) socket=\(.socket) pane=\(.pane) pane_pid=\(.pane_pid) fg=\(.fg) fg_start=\(.fg_start) due=\(.due) attempts=\(.attempts) hit=\(.hit // 0) sent=\(.sent // 0) deferred=\(.deferred // 0)"' "$file" 2>/dev/null)"; then
-            rm -f "$file"
-            continue
-        fi
-        eval "$fields"
-
-        # The agent continued on its own, the user did, or the user cancelled
-        # the agent's countdown on purpose. All of them are the user's call.
-        if ! provider_call "$id" stuck "$transcript"; then
-            log "[$id] Session $session is no longer stopped on the limit; nothing to do"
-            rm -f "$file"
-            continue
-        fi
-
-        if (( due > now )); then
-            arm_resume "$id" "$due"
-            continue
-        fi
-
-        if (( attempts >= 2 )); then
-            log "[$id] Session $session is still stopped after $attempts tries; giving up"
-            notify "resume-failed" \
-                "$(provider_call "$id" label) did not continue the session in tmux pane $pane after its usage limit reset, and neither did Fluid. It is waiting for you." || true
-            rm -f "$file"
-            continue
-        fi
-
-        # Same pane id is not proof enough: a restarted tmux server hands the
-        # ids out again, and a new agent started from the same shell keeps the
-        # shell's pid but not the foreground process or its start time
-        current="$(tmux -S "$socket" display-message -p -t "$pane" '#{pane_pid}' 2>/dev/null)"
-        if [[ -z "$current" || "$current" != "$pane_pid" ]] ||
-           [[ "$(foreground_pgid "$current")" != "$fg" ]] ||
-           [[ "$(process_start "$fg")" != "$fg_start" ]]; then
-            log "[$id] Pane $pane no longer runs session $session; not typing into it"
-            rm -f "$file"
-            continue
-        fi
-
-        # 誰かが上限の後にこの tmux セッションでキーを押していれば、その人が
-        # そこにいる。入力の途中かもしれないので、打ち込まずに任せる。自分が
-        # 送ったキーで活動時刻が動く場合に備えて、送った直後の分は数えない
-        activity="$(tmux -S "$socket" display-message -p -t "$pane" '#{session_activity}' 2>/dev/null)"
-        if [[ "$activity" =~ ^[0-9]+$ ]] && (( hit > 0 && activity > hit && activity > sent + 5 )); then
-            log "[$id] Someone has used the tmux session of pane $pane since the limit; leaving session=$session to them"
-            rm -f "$file"
-            continue
-        fi
-
-        # コピーモードの最中に打つと、キーはモードのコマンドとして読まれる。
-        # 試行には数えずに少し後でもう一度見る。一時間続けばあきらめて知らせる
-        in_mode="$(tmux -S "$socket" display-message -p -t "$pane" '#{pane_in_mode}' 2>/dev/null)"
-        if [[ "$in_mode" == 1 ]]; then
-            if (( deferred > 0 && now - deferred > 3600 )); then
-                log "[$id] Pane $pane has been in a tmux mode for an hour; giving up session=$session"
-                notify "resume-failed" \
-                    "$(provider_call "$id" label) did not continue the session in tmux pane $pane after its usage limit reset, and the pane has been in copy mode since. It is waiting for you." || true
-                rm -f "$file"
-                continue
-            fi
-            (( deferred > 0 )) || deferred="$now"
-            if jq --argjson d "$deferred" --argjson due "$((now + RESUME_VERIFY))" \
-                    '.deferred = $d | .due = $due' "$file" > "$file.tmp.$$" &&
-               mv "$file.tmp.$$" "$file"; then
-                log "[$id] Pane $pane is in a tmux mode; looking again shortly session=$session"
-                arm_resume "$id" "$((now + RESUME_VERIFY))"
-            else
-                rm -f "$file.tmp.$$"
-            fi
-            continue
-        fi
-
-        # Count the attempt before sending: one that cannot be counted is not
-        # sent, or nothing would stop it being sent on every run
-        if ! jq --argjson a "$((attempts + 1))" --argjson due "$((now + RESUME_VERIFY))" \
-                --argjson sent "$now" \
-                '.attempts = $a | .due = $due | .sent = $sent' "$file" > "$file.tmp.$$" ||
-           ! mv "$file.tmp.$$" "$file"; then
-            rm -f "$file.tmp.$$"
-            log "[$id] Could not record the resume attempt; not sending session=$session"
-            continue
-        fi
-
-        if tmux -S "$socket" send-keys -t "$pane" -l continue 2>/dev/null &&
-           tmux -S "$socket" send-keys -t "$pane" Enter 2>/dev/null; then
-            log "[$id] Typed continue into pane $pane session=$session attempt=$((attempts + 1))"
-        else
-            log "[$id] Could not type into pane $pane session=$session"
-        fi
-
-        # Look again shortly, to see whether it took
-        arm_resume "$id" "$((now + RESUME_VERIFY))"
-    done
-    shopt -u nullglob
-}
-
 # ------------------------------------------------------------------- status
 
 show_status() {
@@ -1887,9 +1618,6 @@ show_status() {
             echo "  Readings      : ${origin:-unknown}, last $(fmt_time "$last_reading" '+%Y-%m-%d %H:%M:%S')"
         fi
         echo "  Warmup model  : $(warmup_model "$id" | sed 's/^$/(agent default)/')"
-        if provider_can "$id" resume; then
-            echo "  Resume        : $(( $(find "$dir/pending" -name '*.json' 2>/dev/null | wc -l) )) session(s) stopped on a limit"
-        fi
         echo "  Failures      : ${failures:-0}   auth: $([[ -f "$dir/auth_required" ]] && echo 'RELOGIN MAY BE REQUIRED' || echo OK)"
 
         if [[ "$last_run" =~ ^[0-9]+$ ]]; then
@@ -2017,12 +1745,6 @@ case "${1:-}" in
     scheduled)
         scheduled "${2:-$(default_provider)}"
         ;;
-    rate-limit)
-        rate_limit "${2:-$(default_provider)}"
-        ;;
-    resume)
-        resume "${2:-$(default_provider)}"
-        ;;
     reschedule)
         reschedule
         ;;
@@ -2056,7 +1778,7 @@ case "${1:-}" in
         echo "$VERSION"
         ;;
     *)
-        echo "Usage: $0 {statusline|observe|warmup|scheduled|rate-limit|resume} [provider]" >&2
+        echo "Usage: $0 {statusline|observe|warmup|scheduled} [provider]" >&2
         echo "       $0 {reschedule|scheduler-check|status|providers|notify-test|version}" >&2
         echo "       $0 log <provider> <message> | notify <event> <message>" >&2
         echo "       $0 anchor [HH:MM|off]" >&2
@@ -2073,8 +1795,8 @@ bash -n "$STAGE/fluid.sh"
 
 # One file per agent. See docs/PROVIDERS.md for what these have to answer.
 cat > "$STAGE/providers/claude.sh" <<'PROVIDER_CLAUDE'
-# Claude Code. Its status line hook hands over both windows on every refresh,
-# so this provider pushes: no polling needed.
+# Claude Code. The plugin's hooks module hands over both windows whenever
+# they change, so this provider pushes: no polling needed.
 claude_label() {
     printf 'Claude Code\n'
 }
@@ -2084,21 +1806,10 @@ claude_available() {
 }
 
 claude_capabilities() {
-    printf 'keep alert resume\n'
+    printf 'keep alert\n'
 }
 
-# Is the session in transcript $1 still stopped on a usage limit? Its last
-# turn is the limit error, and nobody has cancelled the automatic continue
-# since: Claude Code writes "Automatic continue cancelled" when Esc is pressed.
-claude_stuck() {
-    reverse_lines "$1" 2>/dev/null |
-        jq -rR 'fromjson? | select(.type == "user" or .type == "assistant"
-                   or (.type == "system" and ((.content // "") | tostring | test("Automatic continue cancelled"))))
-               | if .type == "assistant" and .error == "rate_limit" then "stuck" else "moving" end' 2>/dev/null |
-        head -1 | grep -qx stuck
-}
-
-# The status line payload, as Claude Code writes it
+# The status line payload, the shape the hooks module hands over too
 claude_parse_limits() {
     jq -c '{
         window_seconds: 18000,
@@ -2270,7 +1981,6 @@ fi
 # Inside another program's chain, removal kept the command we render instead.
 for _id in $(wrapped_agents); do
     in_chain "$_id" && continue
-    [[ "$_id" == claude ]] && (( MOD_READINGS )) && continue
     _file="$(agent_settings "$_id")" || continue
     [[ -f "$_file" ]] || continue
 
@@ -2288,7 +1998,6 @@ unset _id _file _current
 # reading it is handling.
 for _id in $(wrapped_agents); do
     in_chain "$_id" && continue
-    [[ "$_id" == claude ]] && (( MOD_READINGS )) && continue
     _file="$(agent_settings "$_id")" || continue
     [[ -f "$_file" ]] || continue
 
@@ -2304,23 +2013,12 @@ for _id in $(wrapped_agents); do
 done
 unset _id _file
 
-# Claude Code reports a turn that stopped on a usage limit, which is what the
-# resume backstop needs. Added whether or not its status line is ours, unless
-# the Claude Code plugin is installing us: it carries that hook itself.
-if command -v claude >/dev/null 2>&1 && [[ "${FLUID_HOOK:-}" != plugin ]]; then
-    edit_json "$(agent_settings claude)" --arg cmd "$BIN rate-limit claude" '
-        .hooks.StopFailure = (
-            (.hooks.StopFailure // [])
-            + [{"matcher": "rate_limit", "hooks": [{"type": "command", "command": $cmd}]}]
-        )
-    '
-fi
 
 # Removal dropped the old at job; put the run the previous version had
 # planned back on the new one
 if ! "$BIN" reschedule; then
     echo "Warning: could not schedule the next run (see $BASE/fluid.log)." >&2
-    echo "         Claude Code and Antigravity try again on their next status line refresh;" >&2
+    echo "         Claude Code and Antigravity try again on their next reading;" >&2
     echo "         for Codex, run the installer again once the scheduler works." >&2
 fi
 
@@ -2336,8 +2034,17 @@ if (( SCHEDULER_RC == 1 )); then
     echo "Warning: atd is not running, so nothing Fluid schedules will run." >&2
     echo "         Start it with: sudo systemctl enable --now atd" >&2
 fi
-if (( MOD_READINGS )); then
-    echo "Claude Code's readings come from the plugin's hooks module; its status line was left as it is."
+# Claude Code's readings and resume come only from the plugin's hooks module,
+# which sets FLUID_MOD in the session it runs in
+if command -v claude >/dev/null 2>&1; then
+    if [[ "${FLUID_HOOK:-}" != plugin ]]; then
+        echo "Claude Code: windows are kept on estimates only. For its readings and resume,"
+        echo "             install the plugin: /plugin install fluid --marketplace MrJasonZhou/fluid"
+    elif [[ -z "${FLUID_MOD:-}" ]]; then
+        echo "Claude Code: the plugin's hooks module did not load in this session, so windows"
+        echo "             are kept on estimates only until it does (hooks modules are still"
+        echo "             rolling out to accounts)."
+    fi
 fi
 if [[ -n "$CHAINED" ]]; then
     echo "A status line belonging to another program already calls Fluid; it was left as it is:"

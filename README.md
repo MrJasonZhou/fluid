@@ -15,7 +15,7 @@ Claude Code, Codex and Antigravity all meter a subscription the same way: a shor
 
 | Agent | Where its limits come from | Changes to its config |
 |---|---|---|
-| Claude Code | its status line, on every refresh | one status line entry, one hook |
+| Claude Code | the Fluid plugin's hooks module, as usage changes | none |
 | Codex | its session logs, read when needed | none |
 | Antigravity | its status line, on every refresh | one status line entry |
 
@@ -31,11 +31,11 @@ Each agent gets its own window, schedule and alerts; nothing is shared between t
 
 ## Requirements
 
-Linux or macOS, with `jq` and at least one of `claude`, `codex` or `agy`. On Linux, runs are queued with `at`, so `atd` has to be running; on macOS they go to launchd, which needs no setup. `tmux` is needed for Resume. On Windows, run Claude Code inside WSL with systemd enabled, so that atd can start.
+Linux or macOS, with `jq` and at least one of `claude`, `codex` or `agy`. For Claude Code, install Fluid as its plugin (below): its readings and Resume come from the plugin's hooks module. On Linux, runs are queued with `at`, so `atd` has to be running; on macOS they go to launchd, which needs no setup. On Windows, run Claude Code inside WSL with systemd enabled, so that atd can start.
 
 ```bash
 sudo systemctl enable --now atd   # Linux
-brew install jq tmux              # macOS
+brew install jq                   # macOS
 ```
 
 ## Install
@@ -59,9 +59,9 @@ Or as a Claude Code plugin, whose installer you then run from inside Claude Code
 /fluid:install
 ```
 
-It brings the Resume hook itself, so the installer leaves that out of your settings, and adds `/fluid:status`, `/fluid:anchor` and `/fluid:uninstall`. Where Claude Code loads the plugin's hooks module (hooks modules are still rolling out to accounts), Fluid takes the usage readings and resumes a stopped session from inside Claude Code, and leaves Claude Code's settings untouched; elsewhere it wraps the status line as described below. `/fluid:status` shows which one is in use.
+It adds `/fluid:status`, `/fluid:anchor` and `/fluid:uninstall`, and a hooks module that runs inside Claude Code: it hands Fluid the usage readings and resumes a stopped session (see Resume), without touching Claude Code's settings. Hooks modules are still rolling out to accounts. Where the module does not load, or without the plugin, Claude Code's windows are still kept open, on estimated reset times alone, and the installer says so. `/fluid:status` shows where the readings come from.
 
-For each agent that has a status line, the installer wraps the one you already had, which keeps showing exactly as before; that, plus one hook for Claude Code (see Resume), is all it changes in that agent's settings, and every settings file is backed up first. Codex needs no configuration at all. Re-running the installer is a clean upgrade rather than a second copy, and it carries over each agent's next scheduled run, its state and your notifier.
+For Antigravity, the installer wraps the status line you already had, which keeps showing exactly as before; that is all it changes in its settings, and every settings file is backed up first. Codex and Claude Code need no configuration at all. Re-running the installer is a clean upgrade rather than a second copy, and it carries over each agent's next scheduled run, its state and your notifier. Versions before 0.3.0 also wrapped Claude Code's status line and added a hook to its settings: uninstall once (below) before installing the plugin, and both come out.
 
 ## Usage
 
@@ -97,9 +97,9 @@ Opening a window costs one request, so Fluid keeps it as small as it can: the ch
 
 ## Resume
 
-Claude Code picks a session back up by itself when a usage limit resets ("Continue automatically at usage limit" in `/config`). Sometimes it does not — a stray key cancelled the countdown, or it never started — and the session sits there until you notice. Fluid is the backstop: it notes each session that stops on a limit, and three minutes after the reset looks again. If the session is still stopped, it types `continue` into its tmux pane.
+Claude Code picks a session back up by itself when a usage limit resets ("Continue automatically at usage limit" in `/config`). Sometimes it does not — a stray key cancelled the countdown, or it never started — and the session sits there until you notice. Fluid is the backstop: its hooks module notes a session that stops on a limit, and three minutes after the reset looks again. If the session is still stopped, it sends `continue`, as you would.
 
-Otherwise it stays out of the way. Nothing is typed if Claude Code or you have already continued, if you cancelled the countdown with Esc, or if the pane now runs something else; it tries twice at most, then tells you. A session outside tmux has nowhere to type into, so it is only logged.
+Otherwise it stays out of the way. Nothing is sent if Claude Code or you have already continued, or if something is half typed in the prompt box; it tries twice at most, then tells you. This needs the plugin, in a Claude Code that loads its hooks module.
 
 ## Alerts
 
@@ -112,7 +112,7 @@ Fluid stays quiet unless something needs you, and tells you about six things:
 | **Scheduler stopped** | A planned run is long overdue, so no window is being kept open; usually `atd` is not running |
 | **Back to normal** | It recovered from any of the problems above |
 | **Warm-up model gone** | The model an agent was warmed up with no longer exists, so its own default is used from now on |
-| **Not resumed** | A session was still stopped after its usage limit reset, and typing `continue` did not get it going either |
+| **Not resumed** | A session was still stopped after its usage limit reset, and sending `continue` did not get it going either |
 
 Each one is announced once per agent, not on every retry, so a problem overnight costs you a single message. A failure that passes on its own costs nothing at all: a signed-out agent is reported only once a later retry has failed too. Usage limits themselves are never announced: they are routine, and the agents, or Fluid behind them, pick up after them.
 

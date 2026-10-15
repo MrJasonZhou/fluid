@@ -34,14 +34,13 @@ the rest have defaults.
 |---|---|---|
 | `<id>_label` | — | a human name, e.g. `Claude Code` |
 | `<id>_available` | — | exit 0 when the agent is installed here |
-| `<id>_capabilities` | — | space-separated: `keep`, `alert`, `resume` |
+| `<id>_capabilities` | — | space-separated: `keep`, `alert` |
 | `<id>_parse_limits` | the agent's own JSON on stdin | the fields above as JSON, omitting what it does not know |
 | `<id>_warmup` | a model id, possibly empty | runs the smallest possible request; output on stdout, exit code decides |
 | `<id>_cheap_model` | — | the cheapest model worth warming up with; empty to let the agent choose |
 | `<id>_auth_failed` | warmup output on stdin | exit 0 only when the login is really gone and someone must sign in again |
 | `<id>_unknown_model` | warmup output on stdin | exit 0 when the failure is a model the agent no longer knows |
 | `<id>_pull_limits` | — | the agent's own JSON, for agents that cannot push (see below) |
-| `<id>_stuck` | a session transcript path | exit 0 when that session is still stopped on a usage limit and nobody has continued or cancelled it |
 
 ### Capabilities
 
@@ -55,12 +54,10 @@ agent with one shared weekly pool and no short window (Grok Build) has no
 window to keep open. Those providers declare `alert` alone, and the core never
 schedules a warmup for them.
 
-`resume` means the agent reports a turn that stopped on a usage limit (for
-Claude Code, a `StopFailure` hook calling `fluid.sh rate-limit <id>`)
-and `<id>_stuck` can read a session's transcript. The agent's own automatic
-continue always goes first: the core looks again `RESUME_GRACE` seconds after
-the reset and types `continue` into the session's tmux pane only if `stuck`
-still says so and the pane still runs the same process.
+Resuming a session stopped on a usage limit is not part of the contract. It
+needs to be inside the agent: for Claude Code the plugin's hooks module does it
+(`hooks/register.ts`), and the core only logs and alerts for it through
+`fluid.sh log` and `fluid.sh notify`.
 
 ### Telling a dead login from a bad minute
 
@@ -86,7 +83,10 @@ takes no `--model` need not define either.
 Some agents run a command of your choosing on every status line refresh, and
 will hand over their limits for free. Those are **push**: the observer wraps
 the agent's status line, and every refresh hands its JSON to `fluid.sh observe
-<id>`, in the background so the status line never waits for it.
+<id>`, in the background so the status line never waits for it. Claude Code
+pushes too, but from the plugin's hooks module rather than a wrapper, so its
+settings are never edited: the module calls `fluid.sh observe claude mod` with
+the same JSON its status line would get.
 
 Others only write their limits to a session log. Those are **pull**: the core
 calls `<id>_pull_limits` when it needs a reading, typically just before a

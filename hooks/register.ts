@@ -11,8 +11,8 @@
 // どの設定ファイルにも手を付けない。
 //
 // このモジュールが読み込まれたセッションでは FLUID_MOD=1 を立てる。そこから
-// 起動される /fluid:install と StopFailure フックはそれを見て、状態栏を包むことと
-// tmux 経由の再開を、このモジュールに任せる。
+// 起動される /fluid:install はそれを見て、読み取りが届くかどうかを伝える。
+// Claude Code の読み取りと再開は、0.3.0 からこのモジュールだけが受け持つ。
 
 import type { EngineInterface, Register, SessionRateLimit } from 'claude-code'
 

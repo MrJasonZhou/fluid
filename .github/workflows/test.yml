@@ -23,7 +23,7 @@ jobs:
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
           /bin/bash --version | head -1
           for t in timeout gtimeout tac flock; do command -v "$t" || true; done
-      # jq ships with both runners; claude, at, launchctl and tmux are faked
+      # jq ships with both runners; claude, at and launchctl are faked
       - run: bash tests/run.sh
 
   # プラグインのフック・モジュール: 最新の Claude Code で検証し、テストする

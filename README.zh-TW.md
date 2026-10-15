@@ -15,7 +15,7 @@ Claude Code、Codex 和 Antigravity 的計量方式是一樣的：一個從你�
 
 | 助手 | 額度資料從哪來 | 會改動它的哪些設定 |
 |------|----------------|--------------------|
-| Claude Code | 它的 status line，每次更新 | 一條 status line 設定、一個 hook |
+| Claude Code | Fluid 外掛的 hooks 模組，用量變化時 | 無 |
 | Codex | 它的工作階段日誌，需要時讀取 | 不改動任何設定 |
 | Antigravity | 它的 status line，每次更新 | 一條 status line 設定 |
 
@@ -31,11 +31,11 @@ Claude Code、Codex 和 Antigravity 的計量方式是一樣的：一個從你�
 
 ## 相依套件
 
-Linux 或 macOS，需要 `jq`，以及 `claude`、`codex`、`agy` 中至少一個。Linux 上用 `at` 排定工作，所以 `atd` 要在執行；macOS 上交給 launchd，不用任何設定。「續跑」需要 `tmux`。Windows 上請在啟用了 systemd 的 WSL 裡執行 Claude Code，這樣 atd 才能啟動。
+Linux 或 macOS，需要 `jq`，以及 `claude`、`codex`、`agy` 中至少一個。Claude Code 請以外掛方式安裝 Fluid（見下文）：它的用量讀取和「續跑」都來自外掛的 hooks 模組。Linux 上用 `at` 排定工作，所以 `atd` 要在執行；macOS 上交給 launchd，不用任何設定。Windows 上請在啟用了 systemd 的 WSL 裡執行 Claude Code，這樣 atd 才能啟動。
 
 ```bash
 sudo systemctl enable --now atd   # Linux
-brew install jq tmux              # macOS
+brew install jq                   # macOS
 ```
 
 ## 安裝
@@ -59,9 +59,9 @@ bash install-fluid.sh
 /fluid:install
 ```
 
-「續跑」用的 hook 由外掛自帶，所以安裝指令碼不會再把它寫進你的設定；另外還有 `/fluid:status`、`/fluid:anchor` 和 `/fluid:uninstall`。在 Claude Code 會載入外掛 hooks 模組的環境裡（hooks 模組仍在按帳號逐步開放），Fluid 直接在 Claude Code 內部讀取用量並續跑停下的工作階段，完全不改 Claude Code 的設定；其他環境則照下文所述包裝狀態列。用 `/fluid:status` 可以看到目前用的是哪一種。
+外掛提供 `/fluid:status`、`/fluid:anchor` 和 `/fluid:uninstall`，還帶一個在 Claude Code 內部執行的 hooks 模組：它把用量讀數交給 Fluid，並續跑停下的工作階段（見「續跑」），完全不改 Claude Code 的設定。hooks 模組仍在按帳號逐步開放。模組沒有載入、或者沒裝外掛時，Claude Code 的視窗照樣會保持開啟，只是只能按估算的重置時間來排，安裝指令碼會提示這一點。用 `/fluid:status` 可以看到讀數來自哪裡。
 
-對每個帶 status line 的助手，安裝指令碼會包裝你現有的那條（顯示和原本完全一樣），這是它對該助手設定做的唯一改動（Claude Code 另外多一個 hook，見「續跑」），而且每個設定檔都會先備份。Codex 完全不需要設定。重複執行安裝指令碼是一次乾淨的升級，而不是裝第二份，並且會保留每個助手下一次排好的工作、它的狀態，以及你的通知指令碼。
+對 Antigravity，安裝指令碼會包裝你現有的 status line（顯示和原來完全一樣），這是它對其設定做的唯一改動，而且每個設定檔都會先備份。Codex 和 Claude Code 完全不需要設定。重複執行安裝指令碼是一次乾淨的升級，而不是裝第二份，並且會保留每個助手下一次排好的工作、它的狀態，以及你的通知指令碼。0.3.0 之前的版本還會包裝 Claude Code 的 status line，並在它的設定裡加一個 hook：裝外掛前先解除安裝一次（見下文），這兩項就會被移除。
 
 ## 使用
 
@@ -97,9 +97,9 @@ tail -f ~/.fluid/fluid.log  # 它都做了些什麼
 
 ## 續跑
 
-用量上限一重置，Claude Code 會自己把工作階段接著跑下去（`/config` 裡的 "Continue automatically at usage limit"）。但有時它沒接上 —— 誤按的一個鍵取消了倒數，或者倒數根本沒開始 —— 工作階段就一直停在那裡，直到你發現。Fluid 是最後一道防線：它記下每個停在上限上的工作階段，重置三分鐘後再看一眼，如果還停著，就往它的 tmux 窗格裡輸入 `continue`。
+用量上限一重置，Claude Code 會自己把工作階段接著跑下去（`/config` 裡的 "Continue automatically at usage limit"）。但有時它沒接上 —— 誤按的一個鍵取消了倒數，或者倒數根本沒開始 —— 工作階段就一直停在那裡，直到你發現。Fluid 是最後一道防線：它的 hooks 模組記下停在上限上的工作階段，重置三分鐘後再看一眼，如果還停著，就像你一樣送出一句 `continue`。
 
-除此之外它不插手。Claude Code 或你已經接著做了、你按 Esc 取消了倒數、或者那個窗格裡已經換成別的程式，它都不會輸入任何東西；最多試兩次，還不行就通知你。不在 tmux 裡的工作階段沒處可輸入，只記一筆日誌。
+除此之外它不插手。Claude Code 或你已經接著做了、或者輸入框裡有沒打完的內容，它都不會送出任何東西；最多試兩次，還不行就通知你。這需要安裝外掛，並且 Claude Code 會載入它的 hooks 模組。
 
 ## 提醒
 
@@ -112,7 +112,7 @@ Fluid 平時不出聲，只在需要你處理時才響，而且只報告六件�
 | **排程停了** | 排好的工作過了很久還沒執行，視窗沒有被保持開著；通常是 `atd` 沒在執行 |
 | **恢復正常** | 從上面任一故障中恢復了 |
 | **保溫模型失效** | 某個助手原本用來保溫的模型已經不存在了，之後改用它自己的預設模型 |
-| **沒能續跑** | 用量上限重置後工作階段仍然停著，輸入 `continue` 也沒讓它動起來 |
+| **沒能續跑** | 用量上限重置後工作階段仍然停著，送出 `continue` 也沒讓它動起來 |
 
 每件事按助手各通報一次，不會每次重試都響，所以過夜出問題只會收到一則訊息。自己恢復的故障則一聲不響：只有在稍後的重試也失敗之後，才會報某個助手已登出。撞到用量上限本身從不通知：那是常態，助手自己會接著做，它們沒接上時還有 Fluid。
 

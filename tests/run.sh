@@ -4,7 +4,7 @@
 #   bash tests/run.sh
 #
 # Everything runs inside a throwaway directory: its own HOME, and fake claude,
-# at, atq, atrm, systemctl, pgrep and tmux on PATH. The real at queue and
+# at, atq, atrm, systemctl, pgrep, launchctl and uname on PATH. The real at queue and
 # settings.json are never touched. Needs jq, flock and timeout, which Claude
 # Plus needs anyway.
 
@@ -138,7 +138,7 @@ EOF
 # Another program that wraps whatever status line it finds
 cat > "$FAKES/xwrap" <<'EOF'
 #!/usr/bin/env bash
-s="$HOME/.claude/settings.json"
+s="$HOME/.gemini/antigravity-cli/settings.json"
 d="$HOME/.xwrap-downstream"
 case "$1" in
     install)
@@ -208,19 +208,6 @@ cat > "$FAKES/pgrep" <<'EOF'
 [[ "$(cat "$CP_TEST/atd" 2>/dev/null)" == up ]]
 EOF
 
-# tmux: a pane whose first process is named by a file, and keys sent to it
-# collected in another
-cat > "$FAKES/tmux" <<'EOF'
-#!/usr/bin/env bash
-case "$*" in
-    *pane_in_mode*)      cat "$CP_TEST/tmux-in-mode" 2>/dev/null || echo 0 ;;
-    *session_activity*)  cat "$CP_TEST/tmux-activity" 2>/dev/null || echo 0 ;;
-    *display-message*) [[ -s "$CP_TEST/tmux-pane-pid" ]] && cat "$CP_TEST/tmux-pane-pid" ;;
-    *send-keys*)       echo "${@: -1}" >> "$CP_TEST/tmux-keys" ;;
-    *)                 exit 1 ;;
-esac
-EOF
-
 # launchctl: logs what it is asked, and loads unless told to refuse
 cat > "$FAKES/launchctl" <<'EOF'
 #!/usr/bin/env bash
@@ -254,12 +241,15 @@ NOCLAUDE_PATH="$NOCLAUDE:/usr/bin:/bin:/usr/sbin:/sbin"
 new_home() {
     H="$CP_TEST/home-$1"
     rm -rf "$H"
-    mkdir -p "$H/.claude"
-    S="$H/.claude/settings.json"
+    mkdir -p "$H/.claude" "$H/.gemini/antigravity-cli"
+    # The status line under test is agy's: Claude Code's is never wrapped
+    # since 0.3.0, and CS is only there to show it is left alone
+    S="$H/.gemini/antigravity-cli/settings.json"
+    CS="$H/.claude/settings.json"
     BASE="$H/.fluid"
     CP="$BASE/fluid.sh"
-    ORIGFILE="$BASE/state/claude/original-statusline-command"
-    rm -f "$QUEUE"/* "$CP_TEST"/claude-mode "$CP_TEST"/codex-mode "$CP_TEST"/mv-allow "$CP_TEST"/tmux-in-mode "$CP_TEST"/tmux-activity "$CP_TEST"/claude-runs "$CP_TEST"/claude-args "$CP_TEST"/codex-runs "$CP_TEST"/agy-runs "$CP_TEST"/notify-*
+    ORIGFILE="$BASE/state/agy/original-statusline-command"
+    rm -f "$QUEUE"/* "$CP_TEST"/claude-mode "$CP_TEST"/codex-mode "$CP_TEST"/mv-allow "$CP_TEST"/claude-runs "$CP_TEST"/claude-args "$CP_TEST"/codex-runs "$CP_TEST"/agy-runs "$CP_TEST"/notify-*
     AGYS="$H/.gemini/antigravity-cli/settings.json"
     echo up > "$CP_TEST/atd"
 }
@@ -351,11 +341,10 @@ cat > "$S" <<EOF
           "UserPromptSubmit":[{"hooks":[{"type":"command","command":"/opt/audit"}]}]}}
 EOF
 install_cp >/dev/null
-check "wraps the status line"      '[[ $(jq -r .statusLine.command "$S") == "$CP statusline claude" ]]'
+check "wraps the status line"      '[[ $(jq -r .statusLine.command "$S") == "$CP statusline agy" ]]'
 check "saves the original"         '[[ $(cat "$ORIGFILE") == "$FAKES/cs" ]]'
 check "keeps statusLine siblings"  '[[ $(jq .statusLine.refreshInterval "$S") == 1 ]]'
-check "adds the status line and one hook" '[[ $(( $(grep -o "$MARKER" "$S" | wc -l) )) == 2 && $(jq -r ".hooks.StopFailure[0].matcher" "$S") == rate_limit ]]'
-check "the hook names the agent"   '[[ $(jq -r ".hooks.StopFailure[0].hooks[0].command" "$S") == "$CP rate-limit claude" ]]'
+check "adds the status line and nothing else" '[[ $(( $(grep -o "$MARKER" "$S" | wc -l) )) == 1 && $(jq -c ".hooks | keys" "$S") == "[\"PreToolUse\",\"UserPromptSubmit\"]" ]]'
 check "renders through wrapper"    '[[ $(render) == CS ]]'
 
 jq '.env = {"FOO":"1"} | .hooks.SessionEnd += [{"hooks":[{"type":"command","command":"/opt/save"}]}]' "$S" > "$S.t" && mv "$S.t" "$S"
@@ -373,7 +362,7 @@ echo "/usr/local/bin/nightly" > "$QUEUE/2"
 install_cp >/dev/null
 check "upgrade: original not doubled"  '[[ $(cat "$ORIGFILE") == "$FAKES/cs" ]]'
 check "upgrade: later edits survive"   '[[ $(jq -r .env.FOO "$S") == 1 ]]'
-check "upgrade: stray hooks of ours gone"  '[[ $(( $(grep -o "$MARKER" "$S" | wc -l) )) == 2 && $(jq -c ".hooks | keys" "$S") == "[\"PreToolUse\",\"SessionEnd\",\"StopFailure\",\"UserPromptSubmit\"]" && $(jq ".hooks.StopFailure | length" "$S") == 1 ]]'
+check "upgrade: stray hooks of ours gone"  '[[ $(( $(grep -o "$MARKER" "$S" | wc -l) )) == 1 && $(jq -c ".hooks | keys" "$S") == "[\"PreToolUse\",\"SessionEnd\",\"UserPromptSubmit\"]" ]]'
 check "upgrade: user hooks in those events kept" '[[ $(jq -r ".hooks.UserPromptSubmit[0].hooks[0].command, .hooks.SessionEnd[0].hooks[0].command" "$S" | tr "\n" " ") == "/opt/audit /opt/save " ]]'
 check "upgrade: log kept"              'grep -q "an earlier line" "$BASE/fluid.log"'
 check "upgrade: notifier survives"     '[[ -x "$BASE/notify.sh" ]]'
@@ -533,20 +522,6 @@ done
 # ======================================================================
 section "the probe tells one agent's status line from another's"
 
-# claude の状態栏を調べている最中に、包まれたままの agy の状態栏が更新される
-new_home probe-agents
-with_cs
-mkdir -p "$(dirname "$AGYS")"
-printf '{"statusLine":{"type":"command","command":"%s"}}\n' "$FAKES/cs" > "$AGYS"
-install_cp >/dev/null
-jq --arg c "$FAKES/slowreplace" '.statusLine.command = $c' "$S" > "$S.t" && mv "$S.t" "$S"
-install_cp uninstall > "$CP_TEST/probe.out" 2>&1 &
-installer=$!
-wait_for_probe
-printf '{}' | in_home "$CP" statusline agy >/dev/null 2>&1
-wait "$installer"
-check "another agent's refresh is not a hit" '[[ $(cat "$CP_TEST/probe.out") != *pass-through* && ! -e "$BASE" ]]'
-
 # 調べるために起こした状態栏が、子プロセスを後に残さない
 new_home probe-children
 with_cs
@@ -595,18 +570,18 @@ section "settings are edited where they live, and backups do not pile up"
 
 new_home links
 mkdir -p "$H/dotfiles"
-printf '{"statusLine":{"type":"command","command":"%s"}}\n' "$FAKES/cs" > "$H/dotfiles/claude.json"
-chmod 644 "$H/dotfiles/claude.json"
-ln -sf ../dotfiles/claude.json "$S"
+printf '{"statusLine":{"type":"command","command":"%s"}}\n' "$FAKES/cs" > "$H/dotfiles/agy.json"
+chmod 644 "$H/dotfiles/agy.json"
+ln -sf ../../dotfiles/agy.json "$S"
 for i in 1 2 3 4 5 6 7; do
     echo '{}' > "$S.fluid-install-backup.20200101-00000$i"
 done
 install_cp >/dev/null
-check "a linked settings file stays a link"   '[[ -L $S && $(jq -r .statusLine.command "$H/dotfiles/claude.json") == "$CP statusline claude" ]]'
+check "a linked settings file stays a link"   '[[ -L $S && $(jq -r .statusLine.command "$H/dotfiles/agy.json") == "$CP statusline agy" ]]'
 check "and keeps its permissions"             '[[ $(ls -lL "$S" | cut -c1-10) == "-rw-r--r--" ]]'
 check "only the five newest backups are kept" '[[ $(( $(compgen -G "$S.fluid-*-backup.*" | wc -l) )) == 5 && ! -e "$S.fluid-install-backup.20200101-000003" && -e "$S.fluid-install-backup.20200101-000007" ]]'
 install_cp uninstall >/dev/null
-check "uninstall edits through the link too"  '[[ -L $S ]] && ! grep -qF "$MARKER" "$H/dotfiles/claude.json"'
+check "uninstall edits through the link too"  '[[ -L $S ]] && ! grep -qF "$MARKER" "$H/dotfiles/agy.json"'
 
 # ======================================================================
 section "an install that stops half way leaves the schedule in place"
@@ -632,6 +607,7 @@ section "upgrade keeps runtime state; uninstall removes it"
 new_home state
 with_cs
 install_cp >/dev/null
+mkdir -p "$BASE/state/claude"
 now="$(date +%s)"
 target=$((now + 3600))
 echo $((now + 3585))            > "$BASE/state/claude/five_hour_reset"
@@ -822,6 +798,7 @@ for LOCKS in flock mkdir; do
     new_home "stalllock-$LOCKS"
     with_cs
     install_cp >/dev/null
+    mkdir -p "$BASE/state/claude"
     if [[ "$LOCKS" == flock ]]; then LPATH="$FAKES:$PATH"; else LPATH="$FAKES:$NOFLOCK"; fi
 
     # 遅い notifier: 停止チェックが走っている間を長く取る
@@ -892,9 +869,7 @@ rm -f "$CP_TEST/at-cwd" "$CP_TEST/at-env"
 ( cd "$PROJ" &&
   printf '{"rate_limits":{"five_hour":{"used_percentage":10,"resets_at":%s}}}' "$(( $(date +%s) + 3600 ))" |
       in_home env TMUX=/tmp/tmux-0/default,1,0 TMUX_PANE=%3 CLAUDECODE=1 FOO_KEEP=1 \
-          "$CP" statusline claude >/dev/null )
-# The status line hands the reading to observe in the background
-for i in $(seq 1 100); do [[ -s "$CP_TEST/at-env" ]] && break; sleep 0.05; done
+          "$CP" observe claude mod >/dev/null )
 rm -rf "$PROJ"
 check "queued from /, not the session's directory" '[[ $(our_jobs) == 1 && $(cat "$CP_TEST/at-cwd") == / ]]'
 check "without the session's own variables"        '! grep -Eq "^(TMUX|TMUX_PANE|CLAUDECODE|FLUID_IN_STATUSLINE)=" "$CP_TEST/at-env"'
@@ -970,7 +945,7 @@ install_cp >/dev/null
 check "agy found"                    '[[ $(cp_run providers | grep -c agy) == 1 ]]'
 check "wrapped in its own settings"  '[[ $(jq -r .statusLine.command "$AGYS") == "$CP statusline agy" ]]'
 check "its other settings untouched" '[[ $(jq -r .model "$AGYS") == gemini && $(jq -r .colorScheme "$AGYS") == dark ]]'
-check "claude wrapped separately"    '[[ $(jq -r .statusLine.command "$S") == "$CP statusline claude" ]]'
+check "claude wrapped separately"    '[[ $(jq -r .statusLine.command "$S") == "$CP statusline agy" ]]'
 
 NOW="$(date +%s)"
 RESET="$(TZ=UTC tdate "$(( NOW + 1200 ))" '+%Y-%m-%dT%H:%M:%SZ')"
@@ -1133,165 +1108,35 @@ check "upgrade keeps the choice"       '[[ $(cat "$BASE/state/claude/warmup_mode
 install_cp uninstall >/dev/null
 
 # ======================================================================
-section "a session still stopped after the reset is resumed in its pane"
-
-new_home resume
-with_cs
-make_notifier
-install_cp >/dev/null
-sleep 300 & PANE_A=$!
-sleep 300 & PANE_B=$!
-echo "$PANE_A" > "$CP_TEST/tmux-pane-pid"
-rm -f "$CP_TEST/tmux-keys"
-T="$H/transcript.jsonl"
-PENDING="$BASE/state/claude/pending/s1.json"
-printf '%s\n' '{"type":"user","message":{"content":"go"}}' \
-    '{"type":"assistant","error":"rate_limit","isApiErrorMessage":true}' \
-    '{"type":"system","subtype":"turn_duration"}' > "$T"
-echo "$(( $(date +%s) - 10 ))" > "$BASE/state/claude/resets_at"
-hit() {
-    printf '{"session_id":"s1","transcript_path":"%s"}' "$T" |
-        in_home env "$@" "$CP" rate-limit claude
-}
-due_now() {
-    jq '.due = 0' "$PENDING" > "$PENDING.t" && mv "$PENDING.t" "$PENDING"
-}
-keys() {
-    cat "$CP_TEST/tmux-keys" 2>/dev/null | tr '\n' ' '
-}
-
-hit -u TMUX -u TMUX_PANE
-check "outside tmux: nothing recorded"   '[[ ! -e "$PENDING" ]]'
-
-hit TMUX=/tmp/sock,1,0 TMUX_PANE=%3
-check "in tmux: the session is recorded" '[[ $(jq -r .pane "$PENDING") == %3 && $(jq -r .pane_pid "$PENDING") == "$PANE_A" ]]'
-check "after the reset and a grace"      '(( $(jq .due "$PENDING") >= $(date +%s) + 170 ))'
-check "a resume job is queued"           'grep -lq "resume claude" "$QUEUE"/*'
-check "status counts it"                 '[[ $(cp_run status) == *"Resume        : 1 session"* ]]'
-
-cp_run resume claude
-check "before it is due: leaves it"      '[[ -z $(keys) && -e "$PENDING" ]]'
-
-due_now
-cp_run resume claude
-check "due and still stopped: types continue" '[[ $(keys) == "continue Enter " ]]'
-check "and counts the attempt"           '[[ $(jq .attempts "$PENDING") == 1 ]]'
-
-hit TMUX=/tmp/sock,1,0 TMUX_PANE=%3
-check "hitting the limit again keeps the count" '[[ $(jq .attempts "$PENDING") == 1 ]]'
-
-echo '{"type":"user","message":{"content":"continue"}}' >> "$T"
-due_now
-cp_run resume claude
-check "continued: forgotten, nothing typed" '[[ $(keys) == "continue Enter " && ! -e "$PENDING" ]]'
-
-echo '{"type":"assistant","error":"rate_limit"}' >> "$T"
-hit TMUX=/tmp/sock,1,0 TMUX_PANE=%3
-echo '{"type":"system","subtype":"informational","content":"Automatic continue cancelled · /rate-limit-options to re-arm"}' >> "$T"
-due_now
-cp_run resume claude
-check "cancelled with Esc: left alone"   '[[ $(keys) == "continue Enter " && ! -e "$PENDING" ]]'
-
-echo '{"type":"assistant","error":"rate_limit"}' >> "$T"
-hit TMUX=/tmp/sock,1,0 TMUX_PANE=%3
-echo "$PANE_B" > "$CP_TEST/tmux-pane-pid"
-due_now
-cp_run resume claude
-check "pane runs something else: not typed into" '[[ $(keys) == "continue Enter " && ! -e "$PENDING" ]]'
-
-echo "$PANE_A" > "$CP_TEST/tmux-pane-pid"
-hit TMUX=/tmp/sock,1,0 TMUX_PANE=%3
-jq '.due = 0 | .attempts = 2' "$PENDING" > "$PENDING.t" && mv "$PENDING.t" "$PENDING"
-cp_run resume claude
-check "two tries: gives up and says so"  '[[ $(keys) == "continue Enter " && ! -e "$PENDING" && $(count resume-failed notify-delivered) == 1 ]]'
-
-# コピーモード中は打ち込まず、試行にも数えずに後でもう一度見る
-hit TMUX=/tmp/sock,1,0 TMUX_PANE=%3
-due_now
-echo 1 > "$CP_TEST/tmux-in-mode"
-cp_run resume claude
-check "pane in copy mode: nothing typed yet"    '[[ $(keys) == "continue Enter " && $(jq .attempts "$PENDING") == 0 && $(jq .deferred "$PENDING") -gt 0 ]]'
-rm -f "$CP_TEST/tmux-in-mode"
-
-# 上限の後に誰かがこのセッションでキーを押したなら、その人に任せる
-echo "$(( $(date +%s) + 5 ))" > "$CP_TEST/tmux-activity"
-due_now
-cp_run resume claude
-check "someone typed since: left to them"       '[[ $(keys) == "continue Enter " && ! -e "$PENDING" ]]'
-rm -f "$CP_TEST/tmux-activity"
-
-# 同時に上限に達した複数のセッションでも、resume の予約は一つ
-hooks=""
-rm -f "$QUEUE"/*
-rm -f "$BASE/state/claude/resume_job" "$BASE/state/claude/resume_target"
-for n in 1 2 3 4 5 6; do
-    printf '{"session_id":"c%s","transcript_path":"%s"}' "$n" "$T" |
-        in_home env TMUX=/tmp/sock,1,0 TMUX_PANE=%3 "$CP" rate-limit claude &
-    hooks="$hooks $!"
-done
-wait $hooks
-check "simultaneous hooks queue one resume job" '[[ $(( $(grep -l "resume claude" "$QUEUE"/* 2>/dev/null | wc -l) )) == 1 ]]'
-
-kill "$PANE_A" "$PANE_B" 2>/dev/null
-install_cp uninstall >/dev/null
-check "uninstall takes the hook out"     '! grep -qF "$MARKER" "$S" && [[ $(our_jobs) == 0 ]]'
-
-# ======================================================================
-section "the Claude Code plugin brings the hook and installs the rest"
+section "the Claude Code plugin reads through its hooks module and installs the rest"
 
 v="$(sed -n 's/^VERSION="\(.*\)"$/\1/p' "$INSTALLER")"
 check "one version everywhere" '[[ -n $v && $(jq -r .version "$ROOT/package.json") == "$v" && $(jq -r .version "$ROOT/.claude-plugin/plugin.json") == "$v" && $(jq -r ".metadata.version, .plugins[0].version" "$ROOT/.claude-plugin/marketplace.json" | sort -u) == "$v" ]]'
 check "marketplace names the plugin" '[[ $(jq -r .plugins[0].name "$ROOT/.claude-plugin/marketplace.json") == $(jq -r .name "$ROOT/.claude-plugin/plugin.json") ]]'
+check "the plugin carries the module and no command hooks" '[[ $(jq -c .modules "$ROOT/hooks/hooks.json") == "[\"./register.ts\"]" ]] && ! jq -e .hooks "$ROOT/hooks/hooks.json" >/dev/null'
 
-HOOK="$(jq -r '.hooks.StopFailure[0].hooks[0].command' "$ROOT/hooks/hooks.json")"
 new_home plugin
 with_cs
-echo '{"type":"assistant","error":"rate_limit"}' > "$H/t.jsonl"
-plugin_hook() {
-    printf '{"session_id":"p1","transcript_path":"%s"}' "$H/t.jsonl" |
-        in_home env CLAUDE_PLUGIN_ROOT="$ROOT" TMUX=/tmp/sock,1,0 TMUX_PANE=%7 bash -c "$HOOK"
-}
-plugin_hook; rc=$?
-check "hook before install: quiet no-op" '[[ $rc == 0 && ! -e "$BASE" ]]'
-
+cp "$S" "$CS"
+before="$(cksum < "$CS")"
 check "status before install says so" '[[ $(in_home "$ROOT/scripts/entry.sh" status) == *"/fluid:install"* ]]'
-in_home "$ROOT/scripts/entry.sh" install >/dev/null
-check "plugin install: status line wrapped" '[[ $(jq -r .statusLine.command "$S") == "$CP statusline claude" ]]'
-check "plugin install: no hook in settings" '! jq -e .hooks.StopFailure "$S" >/dev/null'
+out="$(in_home env FLUID_MOD=1 "$ROOT/scripts/entry.sh" install)"
+check "plugin install: Claude Code settings untouched"  '[[ $(cksum < "$CS") == "$before" ]]'
+check "plugin install: no estimate-only notice"         '[[ $out != *"estimates only"* ]]'
+check "plugin install: other agents still wrapped"      '[[ $(jq -r .statusLine.command "$S") == "$CP statusline agy" ]]'
 
-echo "$$" > "$CP_TEST/tmux-pane-pid"
-plugin_hook
 in_home "$ROOT/scripts/entry.sh" anchor '07:00;touch x' >/dev/null; rc=$?
 check "anchor refuses anything but HH:MM|off" '[[ $rc == 2 && ! -e "$BASE/anchor" ]]'
 in_home "$ROOT/scripts/entry.sh" anchor 07:30 >/dev/null
 check "anchor takes a time"              '[[ $(cat "$BASE/anchor") == 07:30 ]]'
-check "the plugin hook records the session" '[[ $(jq -r .pane "$BASE/state/claude/pending/p1.json") == %7 ]]'
-install_cp uninstall >/dev/null
-
-# ======================================================================
-section "where the plugin's hooks module runs, Claude Code's settings are left alone"
-
-new_home modplugin
-with_cs
-mkdir -p "$(dirname "$AGYS")"
-printf '{"statusLine":{"type":"command","command":"%s"}}\n' "$FAKES/cs" > "$AGYS"
-before="$(cksum < "$S")"
-out="$(in_home env FLUID_MOD=1 "$ROOT/scripts/entry.sh" install)"
-check "module install: Claude Code settings untouched"  '[[ $(cksum < "$S") == "$before" ]]'
-check "module install: says where readings come from"   '[[ $out == *"readings come from the plugin'"'"'s hooks module"* ]]'
-check "module install: other agents still wrapped"      '[[ $(jq -r .statusLine.command "$AGYS") == "$CP statusline agy" ]]'
+rm -f "$BASE/anchor"
 
 T="$(( $(date +%s) + 3600 ))"
 printf '{"rate_limits":{"five_hour":{"used_percentage":33,"resets_at":%s},"seven_day":{"used_percentage":22,"resets_at":%s}}}' "$T" "$(( T + 86400 ))" |
     cp_run observe claude mod
 check "a module reading plans the next window"          '[[ $(cat "$BASE/state/claude/at_target") == $(( T + 15 )) && $(our_jobs) == 1 ]]'
 check "status names where the readings come from"       '[[ $(cp_run status) == *"Readings      : hooks module, last 20"* ]]'
-
-# 上限で止まった報告: モジュールが再開させるので tmux の記録は作らない
-echo "$$" > "$CP_TEST/tmux-pane-pid"
-printf '{"session_id":"m1","transcript_path":"%s"}' "$H/t.jsonl" |
-    in_home env FLUID_MOD=1 TMUX=/tmp/sock,1,0 TMUX_PANE=%7 "$CP" rate-limit claude
-check "the module's session is not queued for tmux"     '[[ ! -e "$BASE/state/claude/pending/m1.json" ]] && grep -q "the hooks module resumes it" "$BASE/fluid.log"'
+check "status has no tmux resume any more"              '[[ $(cp_run status) != *"Resume        :"* ]]'
 
 make_notifier
 cp_run log claude "Sending continue to the stopped session, attempt 1"
@@ -1305,17 +1150,43 @@ printf '{"rate_limits":{"five_hour":{"used_percentage":40,"resets_at":%s}}}' "$(
     in_home env FLUID_MOD=1 "$CP" observe claude mod
 check "a queued run carries no module mark"             '[[ -s "$CP_TEST/at-env" ]] && ! grep -q "^FLUID_MOD=" "$CP_TEST/at-env"'
 install_cp uninstall >/dev/null
-check "uninstall leaves Claude Code settings as found"  '[[ $(cksum < "$S") == "$before" && ! -e "$BASE" ]]'
+check "uninstall leaves Claude Code settings as found"  '[[ $(cksum < "$CS") == "$before" && ! -e "$BASE" ]]'
 
-# モジュールが読み込まれていない（ロールアウトの外など）なら、これまでどおり状態栏を包む
-new_home modfallback
-with_cs
-in_home "$ROOT/scripts/entry.sh" install >/dev/null
-check "no module: status line wrapped as before"        '[[ $(jq -r .statusLine.command "$S") == "$CP statusline claude" ]]'
-printf '{}' | cp_run statusline claude >/dev/null
-printf '{"rate_limits":{"five_hour":{"used_percentage":5,"resets_at":%s}}}' "$T" | cp_run statusline claude >/dev/null
-wait_until '[[ -e "$BASE/state/claude/reading_source" ]]'
-check "and its readings are named as the status line's" '[[ $(cp_run status) == *"Readings      : status line"* ]]'
+# モジュールが読み込まれていないセッション、プラグインなしのインストール: 状態栏は包まず、そう伝える
+new_home nomodule
+printf '{"statusLine":{"type":"command","command":"%s"}}\n' "$FAKES/cs" > "$CS"
+before="$(cksum < "$CS")"
+out="$(in_home "$ROOT/scripts/entry.sh" install)"
+check "no module: Claude Code settings untouched"       '[[ $(cksum < "$CS") == "$before" ]]'
+check "no module: says it keeps windows on estimates"   '[[ $out == *"hooks module did not load"* ]]'
+install_cp uninstall >/dev/null
+out="$(install_cp)"
+check "no plugin: Claude Code settings untouched"       '[[ $(cksum < "$CS") == "$before" ]]'
+check "no plugin: points at the plugin"                 '[[ $out == *"/plugin install fluid"* ]]'
+cp_run rate-limit claude </dev/null >/dev/null 2>&1; rc=$?
+check "no plugin: the old hook command is gone"         '[[ $rc == 2 ]]'
+install_cp uninstall >/dev/null
+
+# ======================================================================
+section "what versions before 0.3.0 put in Claude Code's settings comes out"
+
+new_home legacy
+cat > "$CS" <<EOF
+{
+  "model": "opus",
+  "statusLine": {"type": "command", "command": "$BASE/fluid.sh statusline claude", "refreshInterval": 1},
+  "hooks": {
+    "StopFailure": [{"matcher": "rate_limit", "hooks": [{"type": "command", "command": "$BASE/fluid.sh rate-limit claude"}]}],
+    "PreToolUse": [{"hooks": [{"type": "command", "command": "/opt/audit"}]}]
+  }
+}
+EOF
+mkdir -p "$BASE/state/claude"
+echo "$FAKES/cs" > "$BASE/state/claude/original-statusline-command"
+install_cp >/dev/null
+check "upgrade: Claude Code's own status line is back"  '[[ $(jq -r .statusLine.command "$CS") == "$FAKES/cs" && $(jq .statusLine.refreshInterval "$CS") == 1 ]]'
+check "upgrade: the StopFailure hook is gone"           '! grep -qF "$MARKER" "$CS" && [[ $(jq -c ".hooks | keys" "$CS") == "[\"PreToolUse\"]" ]]'
+check "upgrade: everything else kept"                   '[[ $(jq -r .model "$CS") == opus ]]'
 install_cp uninstall >/dev/null
 
 # ======================================================================
@@ -1353,7 +1224,7 @@ reading() {
 }
 
 mac bash "$INSTALLER" >/dev/null 2>&1; rc=$?
-check "installs on macOS"                 '[[ $rc == 0 && $(jq -r .statusLine.command "$S") == "$CP statusline claude" ]]'
+check "installs on macOS"                 '[[ $rc == 0 && $(jq -r .statusLine.command "$S") == "$CP statusline agy" ]]'
 check "no at job"                         '[[ $(our_jobs) == 0 ]]'
 check "status names launchd"              '[[ $(mac "$CP" status) == *"Scheduler       : launchd"* ]]'
 

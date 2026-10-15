@@ -5,13 +5,13 @@
   },
   "metadata": {
     "description": "Fluid as a Claude Code plugin.",
-    "version": "0.3.0"
+    "version": "0.3.1"
   },
   "plugins": [
     {
       "name": "fluid",
       "description": "Keeps Claude Code's usage window open while you are away, resumes a session its own auto-continue missed, and alerts you when either stops working.",
-      "version": "0.3.0",
+      "version": "0.3.1",
       "author": {
         "name": "Jason Zhou"
       },

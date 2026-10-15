@@ -779,8 +779,18 @@ reverse_lines() {
 
 HELD_LOCKS=()
 
+# このプロセス自身の pid。サブシェルでは $$ が親の pid のままなので、
+# bash 4 以降は BASHPID を使い、bash 3.2 では sh の親 pid から得る
+self_pid() {
+    if [[ -n "${BASHPID:-}" ]]; then
+        printf '%s\n' "$BASHPID"
+    else
+        sh -c 'echo "$PPID"'
+    fi
+}
+
 # Take the lock at $2 on file descriptor $1; with $3 = try, give up at once
-# instead of waiting. Held until the process exits.
+# instead of waiting. Held until release_lock, or until the process exits.
 take_lock() {
     local fd="$1" path="$2" mode="${3:-wait}"
 
@@ -796,11 +806,15 @@ take_lock() {
 
     # ponytail: a directory as the lock, for systems without flock. A holder
     # that died is spotted by its pid; contention here is a handful of runs.
-    local dir="$path.d" holder
+    local dir="$path.d" holder held
+    # Already ours: flock lets a process take its own lock again, so must this.
+    # pid ではなく保持リストで判定する（サブシェルは親と同じ $$ を持つため）
+    for held in ${HELD_LOCKS[@]+"${HELD_LOCKS[@]}"}; do
+        [[ "$held" == "$dir" ]] && return 0
+    done
+
     while ! mkdir "$dir" 2>/dev/null; do
         holder="$(cat "$dir/pid" 2>/dev/null)"
-        # Already ours: flock lets a process take its own lock again, so must this
-        [[ "$holder" == "$$" ]] && return 0
         if [[ -n "$holder" ]] && ! kill -0 "$holder" 2>/dev/null; then
             rm -rf "$dir"
             continue
@@ -809,9 +823,35 @@ take_lock() {
         sleep 0.2
     done
 
-    echo "$$" > "$dir/pid"
+    # 親が先に終了しても、バックグラウンドの保持者が生きている間はロックが残るように
+    self_pid > "$dir/pid"
     HELD_LOCKS+=("$dir")
     trap 'rm -rf ${HELD_LOCKS[@]+"${HELD_LOCKS[@]}"}' EXIT
+}
+
+# take_lock で取ったロックを、プロセスの終了を待たずに手放す
+release_lock() {
+    local fd="$1" dir="$2.d" held kept=()
+
+    if command -v flock >/dev/null 2>&1; then
+        eval "exec $fd>&-"
+        return 0
+    fi
+
+    for held in ${HELD_LOCKS[@]+"${HELD_LOCKS[@]}"}; do
+        [[ "$held" == "$dir" ]] || kept+=("$held")
+    done
+    HELD_LOCKS=(${kept[@]+"${kept[@]}"})
+    rm -rf "$dir"
+}
+
+# バックグラウンドの子を起こす前に呼ぶ: 親が持つロックを子に引き継がせない。
+# flock の fd が子に残ると、子が終わるまで他のプロセスがロックを待たされ、
+# mkdir ロックの一覧が残ると、子の EXIT trap が他人のロックを消してしまう
+drop_inherited_locks() {
+    exec 6>&- 7>&- 8>&- 9>&-
+    HELD_LOCKS=()
+    trap - EXIT
 }
 
 # --------------------------------------------------------------- scheduling
@@ -840,7 +880,15 @@ submit_job() {
 
     if [[ "$SCHEDULER" == at ]]; then
         local output
+        # at はジョブに提出時の作業ディレクトリと環境を記録し、実行時にまず
+        # そのディレクトリへ cd して、失敗すれば何も実行せずに終わる。提出元は
+        # たいてい状態栏を描くセッションで、その作業ディレクトリ（後で消える
+        # worktree など）に依存させないよう / から提出し、セッション固有の
+        # 変数も持ち込まない
         output="$(
+            cd / || exit 1
+            unset TMUX TMUX_PANE FLUID_IN_STATUSLINE CLAUDECODE \
+                CLAUDE_CODE_ENTRYPOINT CLAUDE_CODE_SSE_PORT
             printf '%q %q %q\n' "$SELF" "$sub" "$id" |
                 LC_ALL=C at -t "$(fmt_time "$target" '+%Y%m%d%H%M.%S')" 2>&1
         )" || {
@@ -854,6 +902,9 @@ submit_job() {
     # launchd fires on whole minutes; round up so a run is never early
     (( target % 60 == 0 )) || target=$(( (target / 60 + 1) * 60 ))
 
+    # launchd のエージェントは PATH が /usr/bin:/bin:/usr/sbin:/sbin だけで始まり、
+    # Homebrew の jq や tmux、~/.local/bin の claude などが見つからない。提出元の
+    # PATH を plist に書いておけば、ジョブから提出されるジョブにも引き継がれる
     local job="$target-$$-$RANDOM" label plist month day hour minute arg args=""
     label="$LAUNCH_PREFIX.$job"
     plist="$LAUNCH_DIR/$label.plist"
@@ -874,6 +925,10 @@ submit_job() {
 <dict>
     <key>Label</key>
     <string>$label</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key><string>$(xml_escape "$PATH")</string>
+    </dict>
     <key>ProgramArguments</key>
     <array>
 $args    </array>
@@ -924,13 +979,20 @@ remove_job() {
 
 # Schedule `scheduled <id>` at $2, replacing whatever this provider had
 arm_job() {
-    local id="$1" target="$2" reason="${3:-unknown}"
-    local dir
-    dir="$(pstate "$id")"
+    local dir rc=0
+    dir="$(pstate "$1")"
     mkdir -p "$dir"
 
+    # ロックは予約の差し替えの間だけ持つ。プロセスの終了まで持つと、続く
+    # warmup や後から起こすバックグラウンドの子の間も状態栏を待たせてしまう
     take_lock 9 "$dir/schedule.lock"
+    arm_job_locked "$@" || rc=$?
+    release_lock 9 "$dir/schedule.lock"
+    return "$rc"
+}
 
+arm_job_locked() {
+    local id="$1" target="$2" reason="${3:-unknown}"
     local now old_job old_target
     now="$(date +%s)"
     old_job="$(pget "$id" at_job)"
@@ -1066,6 +1128,7 @@ maybe_check_stall() {
     (( now >= last + STALL_GRACE )) || return 0
 
     (
+        drop_inherited_locks
         take_lock 7 "$STATE/stall.lock" try || exit 0
         check_stall "$id" "$target"
     ) </dev/null >/dev/null 2>&1 &
@@ -1205,7 +1268,8 @@ do_warmup() {
     started="$(date +%s)"
     model="$(warmup_model "$id")"
 
-    output="$(provider_call "$id" warmup "$model")"
+    # エージェントが残す子プロセスに warmup のロックを持ち去らせない
+    output="$(provider_call "$id" warmup "$model" 8>&-)"
     rc=$?
 
     # When the agent no longer knows this model, drop to the one it picks for
@@ -1218,7 +1282,7 @@ do_warmup() {
         notify "model-changed" \
             "$(provider_call "$id" label) no longer knows the model Fluid warmed up with ($model), so it has switched to the agent's default. Pick another with: fluid.sh model $id <name>" || true
 
-        output="$(provider_call "$id" warmup "")"
+        output="$(provider_call "$id" warmup "" 8>&-)"
         rc=$?
     fi
 

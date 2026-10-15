@@ -7,7 +7,8 @@
 # Free Software Foundation, either version 3 of the License, or (at your
 # option) any later version. See the LICENSE file for details.
 set -euo pipefail
-# 状態、ログ、包んだ状態栏コマンド（トークンを含むことがある）は本人だけが読める
+# State, the log and the wrapped status line command (which can hold a
+# token) are for this user alone
 umask 077
 
 BASE="$HOME/.fluid"
@@ -17,6 +18,10 @@ PROVIDERS="$BASE/providers"
 NOTIFY="$BASE/notify.sh"
 ANCHOR="$BASE/anchor"
 MARKER="/.fluid/fluid.sh"
+# Exactly the commands Fluid writes into settings: our script, by a path with
+# no shell syntax in it, and plain words after it. Anything else that merely
+# mentions MARKER is the user's (a compound command, say) and stays theirs.
+OURS_RE='^([^[:space:];&|<>()$`"\\]|\\.)*/[.]fluid/fluid[.]sh( +[A-Za-z0-9_-]+)*$'
 
 # Agents that run a status line command of our choosing, and where each keeps
 # its settings. Wrapping one means editing that file, so only agents actually
@@ -147,7 +152,7 @@ prune_backups() {
 # or event is only removed when taking ours out left it empty. Everything
 # else passes through untouched.
 STRIP_FILTER='
-def ours: type == "string" and contains($marker);
+def ours: type == "string" and test($re);
 
 def has_ours_group:
     type == "object" and (.hooks | type) == "array" and any(.hooks[]; .command | ours);
@@ -195,7 +200,7 @@ is_installed() {
     for id in $(known_agents); do
         file="$(agent_settings "$id")" || continue
         [[ -f "$file" ]] || continue
-        jq -e --arg marker "$MARKER" --arg orig "" ". as \$in | ($STRIP_FILTER) != \$in" "$file" >/dev/null 2>&1 &&
+        jq -e --arg re "$OURS_RE" --arg orig "" ". as \$in | ($STRIP_FILTER) != \$in" "$file" >/dev/null 2>&1 &&
             return 0
     done
 
@@ -322,7 +327,7 @@ run_probe() {
 chain_calls_us() {
     local cmd="$1" id="$2" rc=1 saved_traps
 
-    [[ -n "$cmd" && "$cmd" != *"$MARKER"* && -f "$BIN" ]] || return 1
+    [[ -n "$cmd" && -f "$BIN" ]] && ! [[ "$cmd" =~ $OURS_RE ]] || return 1
 
     # Traps first, so nothing below can be left behind. Nothing else in the
     # installer sets these today; whatever is set comes back afterwards.
@@ -444,7 +449,7 @@ remove_installation() {
         [[ -s "$(agent_orig "$id")" ]] && orig="$(cat "$(agent_orig "$id")")"
 
         # Rewrite only when there was something of ours to take out
-        edit_json "$file" --arg marker "$MARKER" --arg orig "$orig" "$STRIP_FILTER"
+        edit_json "$file" --arg re "$OURS_RE" --arg orig "$orig" "$STRIP_FILTER"
     done
 
     remove_jobs
@@ -1105,8 +1110,8 @@ job_exists() {
     [[ -n "$job" ]] || return 1
 
     if [[ "$SCHEDULER" == at ]]; then
-        # root の atq には全員のジョブが並ぶ（最後の列が持ち主）。番号が
-        # 使い回されても、他人のジョブを自分のものと取り違えて atrm しない
+        # root's atq lists every user's jobs, owner in the last column. A job
+        # number reused by someone else's job must never pass for ours
         atq 2>/dev/null | awk -v j="$job" -v me="$(id -un)" '$1 == j && $NF == me { f = 1 } END { exit !f }'
     else
         [[ -f "$LAUNCH_DIR/$LAUNCH_PREFIX.$job.plist" ]]
@@ -1163,10 +1168,15 @@ arm_job_locked() {
     local job_id
     job_id="$(submit_job "$target" scheduled "$id")" || job_id=""
 
+    # Alerts go out in the background, like the stall check's: a reading must
+    # not wait on a slow notifier
     if [[ -z "$job_id" ]]; then
         log "[$id] Could not schedule the next run"
-        notify_once "$(pstate "$id")" schedule "schedule-failed" \
-            "Fluid could not schedule the next run for $(provider_call "$id" label), so nothing is planned for it. See ~/.fluid/fluid.log"
+        (
+            drop_inherited_locks
+            notify_once "$(pstate "$id")" schedule "schedule-failed" \
+                "Fluid could not schedule the next run for $(provider_call "$id" label), so nothing new is planned for it. See ~/.fluid/fluid.log"
+        ) </dev/null >/dev/null 2>&1 &
         return 1
     fi
 
@@ -1181,7 +1191,12 @@ arm_job_locked() {
     pset "$id" at_target "$target"
     pset "$id" at_reason "$reason"
     [[ "$old_job" == "$job_id" ]] || remove_job "$old_job"
-    notify_recovered "$(pstate "$id")" "Fluid can schedule runs for $(provider_call "$id" label) again." schedule
+    if [[ -e "$(pstate "$id")/notified-schedule" ]]; then
+        (
+            drop_inherited_locks
+            notify_recovered "$(pstate "$id")" "Fluid can schedule runs for $(provider_call "$id" label) again." schedule
+        ) </dev/null >/dev/null 2>&1 &
+    fi
 
     log "[$id] Scheduled job=$job_id target=$(fmt_time "$target" '+%Y-%m-%d %H:%M:%S') reason=$reason"
 }
@@ -1201,8 +1216,11 @@ anchor_after() {
     fi
 
     # Tomorrow's date, then the time: `date -d "<date> <time> + 1 day"` reads
-    # the "+ 1" as a UTC offset instead of a day, which silently shifts the hour
-    day="$(fmt_time "$((from + 86400))" '+%Y-%m-%d')" || return 1
+    # the "+ 1" as a UTC offset instead of a day, which silently shifts the hour.
+    # A day on from noon, not from $from: across a DST change a day is 23 or
+    # 25 hours, and late evening plus 24 hours would skip a date
+    today="$(parse_time "$day 12:00")" || return 1
+    day="$(fmt_time "$((today + 86400))" '+%Y-%m-%d')" || return 1
     parse_time "$day $anchor" 2>/dev/null
 }
 
@@ -1232,16 +1250,22 @@ apply_anchor() {
     fi
 }
 
-# Schedule the opening of a new window, honouring the anchor
+# Schedule the opening of a new window, honouring the anchor. A held window
+# remembers when it would have opened, so changing the anchor can undo it.
 arm_window() {
-    local id="$1" target="$2" reason="$3" anchored
+    local id="$1" target="$2" reason="$3" anchored dir
+    dir="$(pstate "$id")"
 
     anchored="$(apply_anchor "$(window_seconds "$id")" "$target")"
 
     if (( anchored != target )); then
         log "[$id] Holding the next window until the anchor at $(fmt_time "$anchored" '+%H:%M')"
+        pset "$id" base_target "$target"
+        pset "$id" base_reason "$reason"
         target="$anchored"
         reason="anchor-hold"
+    elif [[ -e "$dir/base_target" ]]; then
+        rm -f "$dir/base_target" "$dir/base_reason"
     fi
 
     arm_job "$id" "$target" "$reason"
@@ -1274,8 +1298,11 @@ scheduler_running() {
 # target is overdue and the last look was a while ago does a background check
 # run, one at a time, so the status line never waits on atq or a notifier, and
 # the log and any notification retry happen at most every STALL_GRACE seconds.
+#
+# Each agent keeps its own: one whose runs happen says nothing about another's.
 maybe_check_stall() {
-    local id="$1" now target last
+    local id="$1" now target last dir
+    dir="$(pstate "$id")"
 
     target="$(pget "$id" at_target)"
     [[ "$target" =~ ^[0-9]+$ ]] || return 0
@@ -1283,13 +1310,13 @@ maybe_check_stall() {
     now="$(date +%s)"
     (( now > target + STALL_GRACE )) || return 0
 
-    last="$(cat "$STATE/stall_checked_at" 2>/dev/null || true)"
+    last="$(pget "$id" stall_checked_at)"
     [[ "$last" =~ ^[0-9]+$ ]] || last=0
     (( now >= last + STALL_GRACE )) || return 0
 
     (
         drop_inherited_locks
-        take_lock 7 "$STATE/stall.lock" try || exit 0
+        take_lock 7 "$dir/stall.lock" try || exit 0
         check_stall "$id" "$target"
     ) </dev/null >/dev/null 2>&1 &
 }
@@ -1298,10 +1325,10 @@ check_stall() {
     local id="$1" target="$2" job last
 
     # Another refresh may have looked while this one waited for the lock
-    last="$(cat "$STATE/stall_checked_at" 2>/dev/null || true)"
+    last="$(pget "$id" stall_checked_at)"
     [[ "$last" =~ ^[0-9]+$ ]] || last=0
     (( $(date +%s) >= last + STALL_GRACE )) || return 0
-    date +%s > "$STATE/stall_checked_at"
+    pset "$id" stall_checked_at "$(date +%s)"
 
     job="$(pget "$id" at_job)"
     job_exists "$job" || return 0
@@ -1309,8 +1336,8 @@ check_stall() {
     log "[$id] Scheduled run is overdue and still queued: job=$job target=$(fmt_time "$target" '+%Y-%m-%d %H:%M:%S')"
     local hint="Is atd running? Start it with: sudo systemctl enable --now atd"
     [[ "$SCHEDULER" == launchd ]] && hint="launchd did not run it; see ~/.fluid/fluid.log"
-    notify_once "$STATE" stalled "scheduler-stalled" \
-        "Fluid's run scheduled for $(fmt_time "$target" '+%H:%M') has not happened, so nothing is being kept open. $hint"
+    notify_once "$(pstate "$id")" stalled "scheduler-stalled" \
+        "Fluid's run for $(provider_call "$id" label) scheduled for $(fmt_time "$target" '+%H:%M') has not happened, so nothing is being kept open for it. $hint"
 }
 
 # ------------------------------------------------------------- observations
@@ -1331,12 +1358,23 @@ observe() {
         [[ -n "$origin" ]] && pset "$id" reading_source "$origin"
     fi
 
+    # A reading that reports the short window is the whole picture: a window
+    # it no longer reports (a weekly limit gone with a plan change, say) is
+    # dropped, not kept from an older one. One that reports no window at all
+    # (nothing used yet this session) changes nothing. Only plain numbers
+    # are stored.
+    local whole=""
+    [[ "$parsed" == *'"used_percent"'* || "$parsed" == *'"resets_at"'* ]] && whole=1
     for key in window_seconds used_percent resets_at long_used_percent long_resets_at; do
         value="$(
             printf '%s' "$parsed" |
                 jq -r --arg k "$key" '.[$k] // empty' 2>/dev/null
         )"
-        [[ -n "$value" ]] && pset "$id" "$key" "$value"
+        if [[ "$value" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+            pset "$id" "$key" "$value"
+        elif [[ -n "$whole" && -e "$STATE/$id/$key" ]]; then
+            rm -f "$STATE/$id/$key"
+        fi
     done
 
     reset="$(pget "$id" resets_at)"
@@ -1566,7 +1604,7 @@ scheduled() {
 
     # atd ran us, so whatever stall was reported is over
     pset "$id" last_run "$(date +%s)"
-    notify_recovered "$STATE" "Fluid's scheduled runs are happening again." stalled
+    notify_recovered "$(pstate "$id")" "Fluid's scheduled runs for $(provider_call "$id" label) are happening again." stalled
 
     # エージェントが見つからなければ warmup は失敗し続けるだけなので、
     # 一度だけ知らせて、一時間ごとに戻ってくるか確かめる
@@ -1621,9 +1659,13 @@ show_status() {
         echo "Notify          : not configured"
     fi
 
-    for id in $(active_providers); do
-        label="$(provider_call "$id" label)"
+    # Agents off PATH just now too, when they have a plan to show
+    local active
+    active=" $(active_providers | tr '\n' ' ') "
+    for id in $(provider_ids); do
         dir="$(pstate "$id")"
+        [[ "$active" == *" $id "* || -e "$dir/at_target" ]] || continue
+        label="$(provider_call "$id" label)"
         target="$(pget "$id" at_target)"
         reason="$(pget "$id" at_reason)"
         job="$(pget "$id" at_job)"
@@ -1638,6 +1680,7 @@ show_status() {
 
         echo
         echo "[$id] $label"
+        [[ "$active" == *" $id "* ]] || echo "  Agent         : NOT FOUND on PATH"
 
         if ! provider_can "$id" keep; then
             echo "  Keep          : not supported by this agent"
@@ -1670,6 +1713,8 @@ show_status() {
         esac
         if [[ "$last_reading" =~ ^[0-9]+$ ]]; then
             echo "  Readings      : ${origin:-unknown}, last $(fmt_time "$last_reading" '+%Y-%m-%d %H:%M:%S')"
+        else
+            echo "  Readings      : none yet"
         fi
         echo "  Warmup model  : $(warmup_model "$id" | sed 's/^$/(agent default)/')"
         echo "  Failures      : ${failures:-0}   auth: $([[ -f "$dir/auth_required" ]] && echo 'RELOGIN MAY BE REQUIRED' || echo OK)"
@@ -1702,7 +1747,7 @@ show_providers() {
 
 # Show, set or clear the time of day windows should open at
 set_anchor() {
-    local value="${1:-}" id target
+    local value="${1:-}" id target reason
 
     if [[ -z "$value" ]]; then
         if [[ -s "$ANCHOR" ]]; then
@@ -1725,11 +1770,17 @@ set_anchor() {
     fi
 
     # Re-plan what is already scheduled under the new setting
+    # From the time a held window would have opened, not from the anchor
     for id in $(active_providers); do
         provider_can "$id" keep || continue
-        target="$(pget "$id" at_target)"
+        target="$(pget "$id" base_target)"
+        reason="$(pget "$id" base_reason)"
+        if [[ ! "$target" =~ ^[0-9]+$ ]]; then
+            target="$(pget "$id" at_target)"
+            reason="$(pget "$id" at_reason)"
+        fi
         [[ "$target" =~ ^[0-9]+$ ]] || continue
-        arm_window "$id" "$target" "$(pget "$id" at_reason || echo rescheduled)"
+        arm_window "$id" "$target" "${reason:-rescheduled}"
     done
 }
 
@@ -1939,9 +1990,13 @@ codex_pull_limits() {
         head -1
 }
 
+# Read-only, and with no session files left behind where this codex can do
+# that (--ephemeral is newer than some installs)
 codex_warmup() {
     local model="${1:-}"
     local args=(exec --skip-git-repo-check -s read-only)
+
+    codex exec --help 2>/dev/null | grep -q -- --ephemeral && args+=(--ephemeral)
 
     [[ -n "$model" ]] && args+=(-m "$model")
 
@@ -2017,6 +2072,8 @@ remove_installation "${KEEP[@]}"
 rm -rf "$STATE"/*/pending "$STATE"/*/resume_job "$STATE"/*/resume_target \
     "$STATE"/*/resume.lock "$STATE"/*/resume.lock.d \
     "$STATE"/*/resume-job.lock "$STATE"/*/resume-job.lock.d
+# The stall check keeps its state per agent now
+rm -rf "$STATE"/stall_checked_at "$STATE"/stall.lock "$STATE"/stall.lock.d "$STATE"/notified-stalled
 
 mkdir -p "$BASE" "$STATE" "$PROVIDERS"
 
@@ -2047,7 +2104,7 @@ for _id in $(wrapped_agents); do
     [[ -f "$_file" ]] || continue
 
     _current="$(status_command "$_file")"
-    if [[ -n "$_current" && "$_current" != *"$MARKER"* ]]; then
+    if [[ -n "$_current" ]] && ! [[ "$_current" =~ $OURS_RE ]]; then
         mkdir -p "$STATE/$_id"
         printf '%s\n' "$_current" > "$(agent_orig "$_id")"
     fi
@@ -2063,7 +2120,7 @@ for _id in $(wrapped_agents); do
     _file="$(agent_settings "$_id")" || continue
     [[ -f "$_file" ]] || continue
 
-    edit_json "$_file" --arg status_cmd "$BIN statusline $_id" '
+    edit_json "$_file" --arg status_cmd "$(printf '%q' "$BIN") statusline $_id" '
         .statusLine = (
             (.statusLine // {})
             + {

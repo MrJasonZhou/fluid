@@ -87,7 +87,7 @@ Una finestra che passerebbe sopra quell'ora la aspetta: quella prevista alle 03:
 
 ## Il modello usato per il warm-up
 
-Aprire una finestra costa una richiesta, quindi Fluid la tiene più piccola possibile: il modello più economico dell'agente, senza strumenti e senza scrivere nulla nella cronologia. I modelli vanno e vengono, e quando un agente non conosce più quello in uso lo dice chiaramente — Fluid passa allora al modello predefinito dell'agente e te lo segnala una volta, invece di fallire finestra dopo finestra finché qualcuno non legge il log.
+Aprire una finestra costa una richiesta, quindi Fluid la tiene piccola quanto la CLI di ciascun agente consente: un breve prompt, eseguito da `/`. Claude Code usa il suo modello più economico, senza strumenti e senza scrivere nulla nella cronologia; Codex gira in sola lettura e non conserva file di sessione; Antigravity gira come farebbe per te. I modelli vanno e vengono, e quando un agente non conosce più quello in uso lo dice chiaramente — Fluid passa allora al modello predefinito dell'agente e te lo segnala una volta, invece di fallire finestra dopo finestra finché qualcuno non legge il log.
 
 ```bash
 ~/.fluid/fluid.sh model                 # con che cosa si scalda ogni agente

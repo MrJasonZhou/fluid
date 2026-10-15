@@ -87,7 +87,7 @@ Uma janela que passaria por cima desse horário espera por ele: a prevista para 
 
 ## O modelo usado no warm-up
 
-Abrir uma janela custa um pedido, então o Fluid o mantém o menor possível: o modelo mais barato do agente, sem ferramentas e sem escrever nada no histórico. Modelos vêm e vão, e quando um agente deixa de conhecer o que está em uso ele avisa claramente — o Fluid passa então para o modelo padrão do próprio agente e conta isso a você uma vez, em vez de falhar janela após janela até alguém ler o log.
+Abrir uma janela custa um pedido, então o Fluid o mantém tão pequeno quanto a CLI de cada agente permite: um prompt curto, executado a partir de `/`. O Claude Code usa o modelo mais barato que tem, sem ferramentas e sem escrever nada no histórico; o Codex roda em modo somente leitura e não guarda arquivos de sessão; o Antigravity roda como rodaria para você. Modelos vêm e vão, e quando um agente deixa de conhecer o que está em uso ele avisa claramente — o Fluid passa então para o modelo padrão do próprio agente e conta isso a você uma vez, em vez de falhar janela após janela até alguém ler o log.
 
 ```bash
 ~/.fluid/fluid.sh model                 # com que cada agente é aquecido

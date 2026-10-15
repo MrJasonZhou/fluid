@@ -87,7 +87,7 @@ Une fenêtre qui courrait par-dessus cette heure l'attend : celle prévue à 03h
 
 ## Modèle utilisé pour le warm-up
 
-Ouvrir une fenêtre coûte une requête : Fluid la réduit donc au minimum, avec le modèle le moins cher de l'agent, sans outils et sans rien écrire dans l'historique. Les modèles vont et viennent ; quand un agent ne connaît plus celui qui est utilisé, il le dit clairement — Fluid bascule alors sur le modèle par défaut de l'agent et vous prévient une fois, au lieu d'échouer fenêtre après fenêtre jusqu'à ce que quelqu'un lise le journal.
+Ouvrir une fenêtre coûte une requête : Fluid la réduit donc autant que la CLI de chaque agent le permet, à une courte invite lancée depuis `/`. Claude Code utilise son modèle le moins cher, sans outils et sans rien écrire dans l'historique ; Codex tourne en lecture seule et ne garde aucun fichier de session ; Antigravity tourne comme il le ferait pour vous. Les modèles vont et viennent ; quand un agent ne connaît plus celui qui est utilisé, il le dit clairement — Fluid bascule alors sur le modèle par défaut de l'agent et vous prévient une fois, au lieu d'échouer fenêtre après fenêtre jusqu'à ce que quelqu'un lise le journal.
 
 ```bash
 ~/.fluid/fluid.sh model                 # avec quoi chaque agent est réchauffé

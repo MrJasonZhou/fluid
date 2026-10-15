@@ -87,7 +87,7 @@ A window that would run across the anchor waits for it instead: one due at 03:00
 
 ## Warm-up model
 
-Opening a window costs one request, so Fluid keeps it as small as it can: the cheapest model the agent offers, no tools, nothing written to history. Models come and go, and when an agent no longer knows the one in use it says so plainly — Fluid then switches to the agent's own default and tells you, instead of failing window after window until someone reads the log.
+Opening a window costs one request, so Fluid keeps it as small as each agent's CLI allows: one short prompt, run from `/`. Claude Code gets its cheapest model, no tools and nothing written to history; Codex runs read-only and keeps no session files; Antigravity runs as it would for you. Models come and go, and when an agent no longer knows the one in use it says so plainly — Fluid then switches to the agent's own default and tells you, instead of failing window after window until someone reads the log.
 
 ```bash
 ~/.fluid/fluid.sh model                 # what each agent warms up with

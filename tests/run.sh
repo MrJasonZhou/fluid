@@ -114,6 +114,10 @@ EOF
 # codex: records its invocation, so a test can check the provider's own command
 cat > "$FAKES/codex" <<'EOF'
 #!/usr/bin/env bash
+if [[ "$*" == "exec --help" ]]; then
+    [[ -e "$CP_TEST/codex-old" ]] || echo "      --ephemeral"
+    exit 0
+fi
 echo "$*" >> "$CP_TEST/codex-runs"
 pwd > "$CP_TEST/codex-cwd"
 case "$(cat "$CP_TEST/codex-mode" 2>/dev/null)" in
@@ -412,8 +416,9 @@ check "unknown action exits 2"           '[[ $rc == 2 ]]'
 section "strip filter edge cases"
 
 STRIP_FILTER="$(sed -n "/^STRIP_FILTER='$/,/^'$/p" "$INSTALLER" | sed '1d;$d')"
+eval "$(grep "^OURS_RE=" "$INSTALLER")"
 strip() {
-    jq -cS --arg marker "$MARKER" --arg orig "${2:-}" "$STRIP_FILTER" <<< "$1"
+    jq -cS --arg re "$OURS_RE" --arg orig "${2:-}" "$STRIP_FILTER" <<< "$1"
 }
 norm() {
     jq -cS . <<< "$1"
@@ -428,9 +433,24 @@ check "pre-existing empty group kept" \
     '[[ $(strip "{\"hooks\":{\"E\":[{\"hooks\":[]}]}}") == "$(norm "{\"hooks\":{\"E\":[{\"hooks\":[]}]}}")" ]]'
 check "user empty hooks object kept" \
     '[[ $(strip "{\"hooks\":{}}") == "{\"hooks\":{}}" ]]'
+# 我々のコマンドに手を加えたもの、我々のスクリプトを呼ぶ別のコマンドは利用者のもの
+for theirs in "$W statusline agy; echo done" "/opt/audit && $W rate-limit claude" "$W statusline agy | tee /tmp/x"; do
+    check "a command of the user's that calls ours stays: $theirs" \
+        '[[ $(strip "{\"statusLine\":{\"command\":\"$theirs\"},\"hooks\":{\"E\":[{\"hooks\":[{\"command\":\"$theirs\"}]}]}}" /x) == "$(norm "{\"statusLine\":{\"command\":\"$theirs\"},\"hooks\":{\"E\":[{\"hooks\":[{\"command\":\"$theirs\"}]}]}}")" ]]'
+done
+check "a path quoted for the shell is still ours" \
+    '[[ $(strip "{\"statusLine\":{\"command\":\"/h/a\\\\ b/.fluid/fluid.sh statusline agy\"}}") == "{}" ]]'
 for odd in '{"statusLine":"text"}' '{"hooks":[]}' '{"hooks":{"X":"s"}}' '{"hooks":{"X":[1,null]}}' '{"hooks":{"X":[{"hooks":"n"}]}}'; do
     check "odd shape passes through: $odd" '[[ $(strip "$odd") == "$(norm "$odd")" ]]'
 done
+
+# HOME に空白があっても、包んだ状態栏は動き、きれいに外れる
+new_home "with space"
+with_cs
+install_cp >/dev/null
+check "a home with a space: the wrapper runs"   '[[ $(render) == CS ]]'
+install_cp uninstall >/dev/null
+check "and comes out again"                     '[[ $(jq -r .statusLine.command "$S") == "$FAKES/cs" && ! -e "$BASE" ]]'
 
 # ======================================================================
 section "another program wraps the status line around ours"
@@ -784,43 +804,47 @@ mkdir -p "$BASE/state/claude"
 echo $(( $(date +%s) + 600 )) > "$BASE/state/claude/at_target"
 refresh
 sleep 0.5
-check "target in the future: not looked at"  '[[ ! -e "$BASE/state/stall_checked_at" ]]'
+check "target in the future: not looked at"  '[[ ! -e "$BASE/state/claude/stall_checked_at" ]]'
 
 echo $(( $(date +%s) - 400 )) > "$BASE/state/claude/at_target"
 echo 99 > "$BASE/state/claude/at_job"
 refresh
-wait_until '[[ -e "$BASE/state/stall_checked_at" ]]'
+wait_until '[[ -e "$BASE/state/claude/stall_checked_at" ]]'
 sleep 0.3
 check "overdue but no longer queued: quiet" '[[ $(count scheduler-stalled notify-attempts) == 0 ]]'
 
 echo "$CP scheduled" > "$QUEUE/5"
 echo 5 > "$BASE/state/claude/at_job"
-rm -f "$BASE/state/stall_checked_at"
+rm -f "$BASE/state/claude/stall_checked_at"
 echo 1 > "$CP_TEST/notify-fail"
 refresh
 wait_until '[[ $(count scheduler-stalled notify-attempts) == 1 ]]'
 check "overdue and queued: alert attempted" '[[ $(count scheduler-stalled notify-attempts) == 1 ]]'
-check "failed send: not marked"             '[[ ! -e "$BASE/state/notified-stalled" ]]'
+check "failed send: not marked"             '[[ ! -e "$BASE/state/claude/notified-stalled" ]]'
 check "status flags the overdue run"        '[[ $(cp_run status) == *OVERDUE* ]]'
 
 refresh
 sleep 0.5
 check "throttled: no second look straight away" '[[ $(count scheduler-stalled notify-attempts) == 1 ]]'
 
-echo 0 > "$BASE/state/stall_checked_at"
+echo 0 > "$BASE/state/claude/stall_checked_at"
 refresh
-wait_until '[[ $(count scheduler-stalled notify-delivered) == 1 && -e "$BASE/state/notified-stalled" ]]'
-check "retry after grace: delivered, marked" '[[ $(count scheduler-stalled notify-delivered) == 1 && -e "$BASE/state/notified-stalled" ]]'
+wait_until '[[ $(count scheduler-stalled notify-delivered) == 1 && -e "$BASE/state/claude/notified-stalled" ]]'
+check "retry after grace: delivered, marked" '[[ $(count scheduler-stalled notify-delivered) == 1 && -e "$BASE/state/claude/notified-stalled" ]]'
 
-echo 0 > "$BASE/state/stall_checked_at"
+echo 0 > "$BASE/state/claude/stall_checked_at"
 refresh
-wait_until '[[ $(cat "$BASE/state/stall_checked_at") != 0 ]]'
+wait_until '[[ $(cat "$BASE/state/claude/stall_checked_at") != 0 ]]'
 sleep 0.3
 check "marked: not sent again"              '[[ $(count scheduler-stalled notify-attempts) == 2 ]]'
 
+# 別のエージェントの予約が動いても、Claude Code の予約が止まっていることに変わりはない
+cp_run scheduled codex >/dev/null 2>&1
+check "another agent's run does not clear it" '[[ -e "$BASE/state/claude/notified-stalled" && $(count recovered notify-attempts) == 0 ]]'
+
 echo ok > "$CP_TEST/claude-mode"
 cp_run scheduled claude >/dev/null
-check "a run clears the stall, says so"     '[[ ! -e "$BASE/state/notified-stalled" && $(count recovered notify-delivered) == 1 ]]'
+check "a run clears the stall, says so"     '[[ ! -e "$BASE/state/claude/notified-stalled" && $(count recovered notify-delivered) == 1 ]]'
 check "status shows the last run"           '[[ $(cp_run status) == *"Last run      : 20"* ]]'
 
 # ======================================================================
@@ -863,7 +887,7 @@ EOF
     touch "$CP_TEST/at-refuse"
 
     stall_reading 10
-    wait_until '[[ -e "$BASE/state/stall_checked_at" ]]'
+    wait_until '[[ -e "$BASE/state/claude/stall_checked_at" ]]'
     stall_reading 5; rc=$?
     check "$LOCKS: the next reading is not kept waiting" '[[ $rc == 0 ]]'
 
@@ -956,7 +980,11 @@ check "an open window is not warmed up again" '[[ ! -e "$CP_TEST/codex-runs" && 
 
 codex_log "$(( NOW - 60 ))" "$(( NOW + 200000 ))"
 cp_run scheduled codex >/dev/null 2>&1
-check "codex warmed up with its own command" 'grep -q -- "exec --skip-git-repo-check -s read-only" "$CP_TEST/codex-runs"'
+check "codex warmed up with its own command" 'grep -q -- "exec --skip-git-repo-check -s read-only --ephemeral" "$CP_TEST/codex-runs"'
+touch "$CP_TEST/codex-old"
+cp_run warmup codex >/dev/null 2>&1
+rm -f "$CP_TEST/codex-old"
+check "and without --ephemeral where codex lacks it" '[[ $(tail -1 "$CP_TEST/codex-runs") == "exec --skip-git-repo-check -s read-only Reply only OK." ]]'
 check "claude was not run"           '[[ $(count run claude-runs) == 0 ]]'
 check "codex estimate uses its window" '[[ $(cat "$BASE/state/codex/at_reason") == estimated-next-reset ]]'
 
@@ -983,6 +1011,7 @@ job="$(cat "$BASE/state/claude/at_job")"
 touch "$CP_TEST/at-refuse"
 reading_at "$(( T + 600 ))"
 check "a refused job leaves the planned one queued" '[[ -e "$QUEUE/$job" && $(cat "$BASE/state/claude/at_job") == "$job" && $(cat "$BASE/state/claude/at_target") == $(( T + 15 )) ]]'
+wait_until '[[ $(count schedule-failed notify-delivered) == 1 ]]'
 check "and says so"                                 '[[ $(count schedule-failed notify-delivered) == 1 ]]'
 
 # 失敗したのが最後のエージェントでなくても、失敗として返す
@@ -993,6 +1022,7 @@ echo "$job" > "$BASE/state/claude/at_job"
 
 rm -f "$CP_TEST/at-refuse"
 reading_at "$(( T + 600 ))"
+wait_until '[[ $(count recovered notify-delivered) == 1 ]]'
 check "once it works again: replaced, and said so" '[[ ! -e "$QUEUE/$job" && $(our_jobs) == 1 && $(count recovered notify-delivered) == 1 ]]'
 
 # warmup の間に届いた公式の reset を、見積もりで上書きしない
@@ -1041,6 +1071,13 @@ check "not reported again"         '[[ $(count agent-missing notify-attempts) ==
 cp_run scheduled claude >/dev/null 2>&1
 check "back again: says so"        '[[ $(count recovered notify-delivered) == 1 && ! -e "$BASE/state/claude/notified-missing" ]]'
 
+# 更新の時だけ PATH から見えなかったエージェントも、予約を失わず、status にも出る
+target="$(cat "$BASE/state/claude/at_target")"
+HOME="$H" PATH="$NOCLAUDE_PATH" bash "$INSTALLER" >/dev/null 2>&1
+check "an upgrade keeps the plan of an agent off PATH" '[[ $(cat "$BASE/state/claude/at_target") == "$target" ]] && grep -lF "scheduled claude" "$QUEUE"/* >/dev/null 2>&1'
+check "and status still shows it, missing"             '[[ $(HOME="$H" PATH="$NOCLAUDE_PATH" "$CP" status) == *"[claude]"*"NOT FOUND on PATH"* ]]'
+check "an agent with nothing yet: no readings"         '[[ $(cp_run status) == *"Readings      : none yet"* ]]'
+
 # warmup はどこから呼ばれても / で動く
 PROJ="$CP_TEST/project-warm"
 mkdir -p "$PROJ"
@@ -1073,6 +1110,15 @@ check "remaining fraction becomes used" '[[ $(cat "$BASE/state/agy/used_percent"
 check "RFC 3339 becomes an epoch"       '[[ $(cat "$BASE/state/agy/resets_at") == $(( NOW + 1200 )) ]]'
 check "long window read too"            '[[ $(cat "$BASE/state/agy/long_used_percent") == 10 ]]'
 check "planned from its own reading"    '[[ $(cat "$BASE/state/agy/at_target") == $(( NOW + 1215 )) ]]'
+
+# 週の窓を報告しなくなった読み取り: 古い週の値を残さない。何も報告しない
+# 読み取り（まだ使っていないセッション）は何も変えない
+printf '{"quota":{"gemini-5h":{"remaining_fraction":0.5,"reset_time":"%s"}}}' "$RESET" | cp_run observe agy >/dev/null
+check "a long window no longer reported is dropped" '[[ ! -e "$BASE/state/agy/long_used_percent" && $(cat "$BASE/state/agy/used_percent") == 50 ]]'
+printf '{"quota":{}}' | cp_run observe agy >/dev/null
+check "a reading of nothing keeps what is known"    '[[ $(cat "$BASE/state/agy/resets_at") == $(( NOW + 1200 )) ]]'
+printf '{"rate_limits":{"five_hour":{"used_percentage":"50 percent","resets_at":%s}}}' "$(( NOW + 1200 ))" | cp_run observe claude mod >/dev/null
+check "only numbers are stored"                     '[[ ! -e "$BASE/state/claude/used_percent" && $(cat "$BASE/state/claude/resets_at") == $(( NOW + 1200 )) ]]'
 
 cp_run scheduled agy >/dev/null 2>&1
 check "warmed up with its own command"  'grep -q -- "-p Reply only OK." "$CP_TEST/agy-runs"'
@@ -1112,6 +1158,8 @@ anchor_cases() {
     run "2026-09-21 20:01" "01:00" "2026-09-22 01:00"   # a minute inside the end
     run "2026-09-21 21:00" "00:00" "2026-09-22 00:00"   # midnight anchor, held
     run "2026-09-21 00:30" "00:00" "2026-09-21 00:30"   # midnight anchor, missed
+    # 夏時間に入る日の前夜: 23 時間の日をまたいでも、日付を一つ飛ばさない
+    TZ=America/New_York run "2026-03-07 23:30" "01:00" "2026-03-08 01:00"
     run "2026-09-21 03:00" "nonsense" "2026-09-21 03:00"
     run "2026-09-21 03:00" "" "2026-09-21 03:00"
 }
@@ -1169,6 +1217,11 @@ check "cleared: opens as soon as it can" '[[ $(cat "$BASE/state/claude/at_target
 cp_run anchor "$(at_hhmm 7200)" >/dev/null
 check "setting one re-plans the next run" '[[ $(cat "$BASE/state/claude/at_target") == $(at_epoch 7200) && $(cat "$BASE/state/claude/at_reason") == anchor-hold ]]'
 check "only one job of ours is queued"    '[[ $(our_jobs) == 1 ]]'
+
+# 押さえた後で外すと、押さえる前の時刻に戻る（次の読み取りを待たずに）
+cp_run anchor off >/dev/null
+check "clearing it undoes the hold at once" '[[ $(cat "$BASE/state/claude/at_target") == $(( NOW + 60 )) && $(cat "$BASE/state/claude/at_reason") == official-reset && $(our_jobs) == 1 ]]'
+cp_run anchor "$(at_hhmm 7200)" >/dev/null
 
 install_cp >/dev/null
 check "upgrade keeps the anchor"      '[[ $(cat "$BASE/anchor") == $(at_hhmm 7200) ]]'

@@ -87,7 +87,7 @@ Ein Fenster, das über diese Uhrzeit hinweglaufen würde, wartet stattdessen auf
 
 ## Modell für das Warm-up
 
-Ein Fenster zu öffnen kostet eine Anfrage, also hält Fluid sie so klein wie möglich: das günstigste Modell des jeweiligen Agenten, keine Werkzeuge, nichts im Verlauf. Modelle kommen und gehen, und wenn ein Agent das gerade benutzte nicht mehr kennt, sagt er das deutlich — Fluid wechselt dann auf das eigene Standardmodell des Agenten und sagt Ihnen einmal Bescheid, statt Fenster für Fenster zu scheitern, bis jemand das Log liest.
+Ein Fenster zu öffnen kostet eine Anfrage, also hält Fluid sie so klein, wie die CLI des jeweiligen Agenten es erlaubt: eine kurze Eingabe, ausgeführt in `/`. Claude Code bekommt sein günstigstes Modell, keine Werkzeuge und nichts im Verlauf; Codex läuft schreibgeschützt und behält keine Sitzungsdateien; Antigravity läuft so, wie es auch für Sie liefe. Modelle kommen und gehen, und wenn ein Agent das gerade benutzte nicht mehr kennt, sagt er das deutlich — Fluid wechselt dann auf das eigene Standardmodell des Agenten und sagt Ihnen einmal Bescheid, statt Fenster für Fenster zu scheitern, bis jemand das Log liest.
 
 ```bash
 ~/.fluid/fluid.sh model                 # womit jeder Agent aufgewärmt wird

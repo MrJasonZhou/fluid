@@ -46,6 +46,8 @@ type State = {
   pending?: Pending
   isTurnRunning: boolean
   ticker?: { cancel: () => void }
+  // 見回りの途中。一回の見回りが次の周期より長引いても、二つ目は走らせない
+  isTicking?: boolean
 }
 
 // Claude Code の rateLimits を、状態栏が渡す JSON と同じ形にする。fluid.sh の
@@ -99,6 +101,18 @@ async function fluid($: EngineInterface, args: string[], stdin?: string) {
   }
 }
 
+// Fluid が入っているか。プラグインだけが入っている、または /fluid:uninstall の
+// 後は、セッションに何も送らない
+async function isInstalled($: EngineInterface): Promise<boolean> {
+  const home = await $.env.get('HOME')
+  if (home === undefined) return false
+  try {
+    return await $.fs.exists(`${home}/.fluid/fluid.sh`)
+  } catch {
+    return false
+  }
+}
+
 async function observe($: EngineInterface, state: State) {
   const reading = toReading(state.limits)
   if (reading !== undefined) await fluid($, ['observe', 'claude', 'mod'], JSON.stringify(reading))
@@ -110,8 +124,18 @@ function stopWatching(state: State) {
   state.pending = undefined
 }
 
-// 待っている再開の見回り
+// 待っている再開の見回り。重ならないように一つずつ
 async function tick($: EngineInterface, state: State) {
+  if (state.isTicking) return
+  state.isTicking = true
+  try {
+    await tickOnce($, state)
+  } finally {
+    state.isTicking = false
+  }
+}
+
+async function tickOnce($: EngineInterface, state: State) {
   const pending = state.pending
   if (pending === undefined) return stopWatching(state)
 
@@ -136,6 +160,13 @@ async function tick($: EngineInterface, state: State) {
   // 入力欄を読んでいる間に誰か（エージェント自身を含む）が続けていれば送らない
   if (state.pending !== pending || state.isTurnRunning) return
 
+  // 待っている間に /fluid:uninstall されていれば、もう送らない
+  if (!(await isInstalled($))) {
+    stopWatching(state)
+    return
+  }
+  if (state.pending !== pending || state.isTurnRunning) return
+
   pending.attempts += 1
   pending.sentAt = now
   pending.dueAt = now + VERIFY_MS
@@ -146,11 +177,26 @@ async function tick($: EngineInterface, state: State) {
 
 // 上限で止まった: リセットとその後の猶予を待って見回る
 async function stopped($: EngineInterface, state: State) {
+  // Fluid が入っていなければ、止まったセッションには手を出さない
+  if (!(await isInstalled($))) {
+    stopWatching(state)
+    return
+  }
+
   const now = await $.clock.now()
   state.limits = (await $.session.usage()).rateLimits
   const reset = resetAt(state.limits, now)
 
-  const dueAt = (reset ?? now) + GRACE_MS
+  // 開く時刻の分かる使用量の窓（サブスクリプションの 5 時間・週）がなければ、
+  // 止めたのは API キーや gateway の 429 など、Fluid の扱う窓ではない。
+  // 従量課金で人のいない間に続けることになるので、送らない
+  if (reset === undefined) {
+    stopWatching(state)
+    await fluid($, ['log', 'claude', 'Stopped on a limit with no usage window to wait for; not resuming'])
+    return
+  }
+
+  const dueAt = reset + GRACE_MS
 
   // StopFailure と、エラーで終わったターンの両方が同じ停止を知らせることがある
   if (state.pending !== undefined && state.pending.sentAt === undefined && state.pending.dueAt === dueAt) return

@@ -24,6 +24,8 @@ type World = {
   clock: ReturnType<typeof mock.clock>
   // 入力欄が読まれるたびに、答える前に呼ばれる
   onRead?: () => Promise<void>
+  // ~/.fluid/fluid.sh があるか（/fluid:install の後か）
+  isInstalled: boolean
 }
 
 function limitsAt(now: number, used: number, resetInMs: number): SessionRateLimit[] {
@@ -35,7 +37,7 @@ function limitsAt(now: number, used: number, resetInMs: number): SessionRateLimi
 
 // エンジンの下の世界。どのイベントも、ここが最後に答える
 function world(on: On, limits: SessionRateLimit[] = []): World {
-  const w: World = { runs: [], submitted: [], env: {}, limits, draft: '', clock: mock.clock(on, { now: T0 }) }
+  const w: World = { runs: [], submitted: [], env: {}, limits, draft: '', isInstalled: true, clock: mock.clock(on, { now: T0 }) }
 
   mock.env(on, { HOME: '/home/u' })
   on('env.set', (_$, e) => {
@@ -46,6 +48,7 @@ function world(on: On, limits: SessionRateLimit[] = []): World {
     w.runs.push({ argv: [...e.argv], stdin: e.init?.stdin })
     return { value: { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
   })
+  on('fs.exists', (_$, e) => ({ value: e.path === BIN && w.isInstalled }))
   on('session.usage', () => ({ value: { startedAt: T0, context: { window: 200_000 }, rateLimits: w.limits } }))
   on('prompt.read', async () => {
     await w.onRead?.()
@@ -245,5 +248,48 @@ describe('resume', () => {
 
     await w.clock.advance(RESET_IN + GRACE_MS + TICK_MS)
     expect(w.submitted).toEqual([])
+  })
+
+  test('the plugin alone, without /fluid:install, sends nothing', async ($, on) => {
+    const w = world(on)
+    w.isInstalled = false
+    await $.session.start({ cwd: '/work', surface: 'terminal', isInteractive: true })
+    await hitLimit($, w)
+
+    await w.clock.advance(RESET_IN + GRACE_MS + 10 * TICK_MS)
+    expect(w.submitted).toEqual([])
+  })
+
+  test('uninstalled while waiting: sends nothing', async ($, on) => {
+    const w = world(on)
+    await $.session.start({ cwd: '/work', surface: 'terminal', isInteractive: true })
+    await hitLimit($, w)
+
+    await w.clock.advance(RESET_IN)
+    w.isInstalled = false
+    await w.clock.advance(GRACE_MS + 10 * TICK_MS)
+    expect(w.submitted).toEqual([])
+  })
+
+  test('a stop with no usage window to wait for (an API key, a gateway) is left alone', async ($, on) => {
+    const w = world(on)
+    await $.session.start({ cwd: '/work', surface: 'terminal', isInteractive: true })
+    w.limits = []
+    await $.classic.StopFailure({ error: 'rate_limit' })
+
+    await w.clock.advance(GRACE_MS + 20 * TICK_MS)
+    expect(w.submitted).toEqual([])
+    expect(w.runs.some(r => r.argv[1] === 'log' && /no usage window/.test(r.argv[3] ?? ''))).toBe(true)
+  })
+
+  test('a look that outlasts its period does not overlap the next one', async ($, on) => {
+    const w = world(on)
+    await $.session.start({ cwd: '/work', surface: 'terminal', isInteractive: true })
+    await hitLimit($, w)
+
+    // 入力欄の読み取りが一周期より長くかかる
+    w.onRead = () => w.clock.sleep(TICK_MS + 5_000)
+    await w.clock.advance(RESET_IN + GRACE_MS + 4 * TICK_MS)
+    expect(w.submitted).toEqual(['continue'])
   })
 })

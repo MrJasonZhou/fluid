@@ -22,6 +22,8 @@ type World = {
   limits: SessionRateLimit[]
   draft: string
   clock: ReturnType<typeof mock.clock>
+  // 入力欄が読まれるたびに、答える前に呼ばれる
+  onRead?: () => Promise<void>
 }
 
 function limitsAt(now: number, used: number, resetInMs: number): SessionRateLimit[] {
@@ -45,7 +47,10 @@ function world(on: On, limits: SessionRateLimit[] = []): World {
     return { value: { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
   })
   on('session.usage', () => ({ value: { startedAt: T0, context: { window: 200_000 }, rateLimits: w.limits } }))
-  on('prompt.read', () => ({ value: { text: w.draft, cursor: w.draft.length } }))
+  on('prompt.read', async () => {
+    await w.onRead?.()
+    return { value: { text: w.draft, cursor: w.draft.length } }
+  })
   on('prompt.submit', (_$, e) => {
     w.submitted.push(e.text)
     return { text: e.text }
@@ -145,6 +150,24 @@ describe('resume', () => {
     await w.clock.advance(RESET_IN + 10_000)
     await $.turn.start({ text: 'continue', turnId: 't-own' })
     await w.clock.advance(GRACE_MS + TICK_MS)
+    expect(w.submitted).toEqual([])
+  })
+
+  test('sends nothing when a turn starts while it is looking at the box', async ($, on) => {
+    const w = world(on)
+    await $.session.start({ cwd: '/work', surface: 'terminal', isInteractive: true })
+    await hitLimit($, w)
+
+    // 入力欄を読んでいる最中に、人かエージェント自身が続ける
+    let started = false
+    w.onRead = async () => {
+      if (started) return
+      started = true
+      await $.turn.start({ text: 'my own prompt', turnId: 't-race' })
+    }
+    await w.clock.advance(RESET_IN + GRACE_MS + TICK_MS)
+    await w.clock.advance(10 * TICK_MS)
+    expect(started).toBe(true)
     expect(w.submitted).toEqual([])
   })
 

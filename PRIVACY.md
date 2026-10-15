@@ -5,15 +5,17 @@ analytics, and sends nothing to its author.
 
 ## What it reads
 
-- **Your agent's status line payload** (Claude Code, Antigravity) or, for
-  Codex, the newest session log: only the usage-limit fields — how much of the
-  current window is used and when it resets.
-- **A session's transcript**, only after that session stopped on a usage
-  limit: Fluid checks whether the last turn is still the limit error and
-  whether the automatic continue was cancelled. It does not read or keep the
-  content of the conversation.
-- **Your agent's settings file**, to wrap the status line you already have and
-  to restore it when you uninstall.
+- **Usage limits**: for Claude Code, what its plugin's hooks module is told
+  inside Claude Code; for Antigravity, its status line payload; for Codex, the
+  newest session log. Only the usage-limit fields — how much of the current
+  window is used and when it resets.
+- **Claude Code's prompt box**, only when a session stopped on a usage limit
+  is about to be resumed: the hooks module checks whether anything is typed
+  there, so it never sends over a draft. It does not keep what it sees, and it
+  does not read the conversation.
+- **Antigravity's settings file**, to wrap the status line you already have
+  and to restore it when you uninstall, and Claude Code's, only to take out
+  what versions before 0.3.0 put there.
 
 ## What it stores
 
@@ -21,9 +23,6 @@ Everything lives in `~/.fluid/` on your machine and nowhere else:
 
 - reset times, usage percentages, the time of the next scheduled run, failure
   counts and alert flags;
-- for a session stopped on a limit: its session id, transcript path, tmux pane
-  id and the pane's process id and start time, deleted once the session moves
-  on;
 - `fluid.log`, a record of what Fluid did and when;
 - your notifier, `notify.sh`, if you set one up. It may hold a key or password
   you put there yourself; Fluid only runs it.

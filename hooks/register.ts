@@ -133,11 +133,15 @@ async function tick($: EngineInterface, state: State) {
     return
   }
 
+  // 入力欄を読んでいる間に誰か（エージェント自身を含む）が続けていれば送らない
+  if (state.pending !== pending || state.isTurnRunning) return
+
   pending.attempts += 1
   pending.sentAt = now
   pending.dueAt = now + VERIFY_MS
-  await fluid($, ['log', 'claude', `Sending continue to the stopped session, attempt ${pending.attempts}`])
+  // 送るまでの間に何も待たない。ログは送った後で、待たずに
   await $.prompt.submit({ text: 'continue', asUser: true })
+  void fluid($, ['log', 'claude', `Sent continue to the stopped session, attempt ${pending.attempts}`])
 }
 
 // 上限で止まった: リセットとその後の猶予を待って見回る

@@ -940,12 +940,13 @@ new_home agy
 with_cs
 mkdir -p "$(dirname "$AGYS")"
 printf '{"model":"gemini","colorScheme":"dark","statusLine":{"type":"command","command":"%s"}}\n' "$FAKES/cs" > "$AGYS"
+cp "$S" "$CS"
 install_cp >/dev/null
 
 check "agy found"                    '[[ $(cp_run providers | grep -c agy) == 1 ]]'
 check "wrapped in its own settings"  '[[ $(jq -r .statusLine.command "$AGYS") == "$CP statusline agy" ]]'
 check "its other settings untouched" '[[ $(jq -r .model "$AGYS") == gemini && $(jq -r .colorScheme "$AGYS") == dark ]]'
-check "claude wrapped separately"    '[[ $(jq -r .statusLine.command "$S") == "$CP statusline agy" ]]'
+check "Claude Code's settings left alone" '[[ $(jq -r .statusLine.command "$CS") == "$FAKES/cs" ]] && ! grep -qF "$MARKER" "$CS"'
 
 NOW="$(date +%s)"
 RESET="$(TZ=UTC tdate "$(( NOW + 1200 ))" '+%Y-%m-%dT%H:%M:%SZ')"

@@ -59,7 +59,7 @@ bash install-fluid.sh
 /fluid:install
 ```
 
-外掛提供 `/fluid:status`、`/fluid:anchor` 和 `/fluid:uninstall`，還帶一個在 Claude Code 內部執行的 hooks 模組：它把用量讀數交給 Fluid，並續跑停下的工作階段（見「續跑」），完全不改 Claude Code 的設定。hooks 模組仍在按帳號逐步開放。模組沒有載入、或者沒裝外掛時，Claude Code 的視窗照樣會保持開啟，只是只能按估算的重置時間來排，安裝指令碼會提示這一點。用 `/fluid:status` 可以看到讀數來自哪裡。
+外掛提供 `/fluid:status`、`/fluid:anchor` 和 `/fluid:uninstall`，還帶一個在 Claude Code 內部執行的 hooks 模組：它把用量讀數交給 Fluid，並續跑停下的工作階段（見「續跑」），完全不改 Claude Code 的設定。hooks 模組仍在按帳號逐步開放。模組沒有載入、或者沒裝外掛時，Fluid 收不到 Claude Code 的讀數：在收到第一份讀數之前，不會為它排任何工作；收到之後，也只能按估算的重置時間往下排。模組沒有載入時，安裝指令碼會提示。用 `/fluid:status` 可以看到讀數來自哪裡。
 
 對 Antigravity，安裝指令碼會包裝你現有的 status line（顯示和原來完全一樣），這是它對其設定做的唯一改動，而且每個設定檔都會先備份。Codex 和 Claude Code 完全不需要設定。重複執行安裝指令碼是一次乾淨的升級，而不是裝第二份，並且會保留每個助手下一次排好的工作、它的狀態，以及你的通知指令碼。0.3.0 之前的版本還會包裝 Claude Code 的 status line，並在它的設定裡加一個 hook：裝外掛前先解除安裝一次（見下文），這兩項就會被移除。
 

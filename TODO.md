@@ -30,8 +30,10 @@ Claude Code's readings and resume come only from the plugin's hooks module.
 Installed plugins' hooks modules load only where Claude Code's rollout flag
 `tengu_plugin_hooks_modules` is on for the account, and Claude Code ships the
 rollout to everyone in time, so there is no fallback: where the module does
-not load, or without the plugin, Claude Code's windows are kept on estimated
-resets alone and the installer says so. Installs before 0.3.0 wrapped Claude
+not load, or without the plugin, nothing is planned for Claude Code until a
+first reading arrives, after which the chain runs on estimated resets alone;
+the installer says when the module did not load, though its message still
+claims windows are kept on estimates from the start (fix in the next release). Installs before 0.3.0 wrapped Claude
 Code's status line and added a StopFailure hook; uninstalling (or installing
 0.3.0) takes both out, through the same strip filter as ever. Open:
 

@@ -59,7 +59,7 @@ Or as a Claude Code plugin, whose installer you then run from inside Claude Code
 /fluid:install
 ```
 
-It adds `/fluid:status`, `/fluid:anchor` and `/fluid:uninstall`, and a hooks module that runs inside Claude Code: it hands Fluid the usage readings and resumes a stopped session (see Resume), without touching Claude Code's settings. Hooks modules are still rolling out to accounts. Where the module does not load, or without the plugin, Claude Code's windows are still kept open, on estimated reset times alone, and the installer says so. `/fluid:status` shows where the readings come from.
+It adds `/fluid:status`, `/fluid:anchor` and `/fluid:uninstall`, and a hooks module that runs inside Claude Code: it hands Fluid the usage readings and resumes a stopped session (see Resume), without touching Claude Code's settings. Hooks modules are still rolling out to accounts. Where the module does not load, or without the plugin, Fluid gets no readings from Claude Code: nothing is planned for it until a first reading arrives, and after that the chain runs on estimated reset times alone. The installer says when the module did not load. `/fluid:status` shows where the readings come from.
 
 For Antigravity, the installer wraps the status line you already had, which keeps showing exactly as before; that is all it changes in its settings, and every settings file is backed up first. Codex and Claude Code need no configuration at all. Re-running the installer is a clean upgrade rather than a second copy, and it carries over each agent's next scheduled run, its state and your notifier. Versions before 0.3.0 also wrapped Claude Code's status line and added a hook to its settings: uninstall once (below) before installing the plugin, and both come out.
 

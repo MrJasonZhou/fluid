@@ -59,7 +59,7 @@ bash install-fluid.sh
 /fluid:install
 ```
 
-插件提供 `/fluid:status`、`/fluid:anchor` 和 `/fluid:uninstall`，还带一个在 Claude Code 内部运行的 hooks 模块：它把用量读数交给 Fluid，并续跑停下的会话（见“续跑”），完全不改 Claude Code 的配置。hooks 模块仍在按账号逐步开放。模块没有加载、或者没装插件时，Claude Code 的窗口照样会保持打开，只是只能按估算的重置时间来排，安装脚本会提示这一点。用 `/fluid:status` 可以看到读数来自哪里。
+插件提供 `/fluid:status`、`/fluid:anchor` 和 `/fluid:uninstall`，还带一个在 Claude Code 内部运行的 hooks 模块：它把用量读数交给 Fluid，并续跑停下的会话（见“续跑”），完全不改 Claude Code 的配置。hooks 模块仍在按账号逐步开放。模块没有加载、或者没装插件时，Fluid 收不到 Claude Code 的读数：在收到第一份读数之前，不会为它排任何任务；收到之后，也只能按估算的重置时间往下排。模块没有加载时，安装脚本会提示。用 `/fluid:status` 可以看到读数来自哪里。
 
 对 Antigravity，安装脚本会包装你现有的 status line（显示和原来完全一样），这是它对其配置做的唯一改动，而且每个配置文件都会先备份。Codex 和 Claude Code 完全不需要配置。重复执行安装脚本是一次干净的升级，而不是装第二份，并且会保留每个助手下一次排好的任务、它的状态，以及你的通知脚本。0.3.0 之前的版本还会包装 Claude Code 的 status line，并在它的配置里加一个 hook：装插件前先卸载一次（见下文），这两项就会被去掉。
 

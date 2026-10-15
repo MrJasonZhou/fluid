@@ -1158,8 +1158,12 @@ arm_job_locked() {
         target=$((now + 5))
     fi
 
-    # Same target and the job is still queued: nothing to do
-    if [[ "$target" == "$old_target" ]] && job_exists "$old_job"; then
+    # Same plan and the job is still queued: nothing to do. An agent can report
+    # the same reset a few seconds apart from one reading to the next (agy
+    # does), and each new job costs a write to the spool
+    if [[ "$old_target" =~ ^[0-9]+$ ]] && (( target - old_target < 120 && old_target - target < 120 )) &&
+       [[ "$target" == "$old_target" || "$reason" == "$(pget "$id" at_reason)" ]] &&
+       job_exists "$old_job"; then
         return 0
     fi
 

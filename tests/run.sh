@@ -1015,6 +1015,12 @@ reading_at() {
 }
 reading_at "$T"
 job="$(cat "$BASE/state/claude/at_job")"
+
+# The same reset reported a few seconds apart keeps the job it has
+reading_at "$(( T + 2 ))"
+reading_at "$(( T - 3 ))"
+check "a reset that jitters by seconds keeps its job" '[[ $(cat "$BASE/state/claude/at_job") == "$job" && $(our_jobs) == 1 ]]'
+
 touch "$CP_TEST/at-refuse"
 reading_at "$(( T + 600 ))"
 check "a refused job leaves the planned one queued" '[[ -e "$QUEUE/$job" && $(cat "$BASE/state/claude/at_job") == "$job" && $(cat "$BASE/state/claude/at_target") == $(( T + 15 )) ]]'

@@ -101,6 +101,18 @@ Claude Code picks a session back up by itself when a usage limit resets ("Contin
 
 Otherwise it stays out of the way. Nothing is sent if Claude Code or you have already continued, or if something is half typed in the prompt box; it tries twice at most, then tells you. This needs the plugin, in a Claude Code that loads its hooks module.
 
+## Restart to update
+
+Claude Code installs updates in the background, but a running session stays on the old build until it is restarted. In tmux, Fluid can do that for you: once a newer build is installed, a session that nobody is attached to, with no turn running, nothing in the prompt box and nothing done for ten minutes, is restarted with `claude -r` on the same conversation, in the same pane and directory. Options it was started with (`--model`, say) are not carried over, and the same build is never restarted onto twice within six hours.
+
+It is off by default. Turn it on in the `env` of `~/.claude/settings.json`:
+
+```json
+"env": { "AUTO_RESTART_TO_UPDATE": "on" }
+```
+
+`dry` instead of `on` only writes what it would do into the session. This needs the plugin, in a Claude Code that loads its hooks module, and tmux 3.0 or later.
+
 ## Alerts
 
 Fluid stays quiet unless something needs you, and tells you about six things:

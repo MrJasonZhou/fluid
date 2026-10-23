@@ -101,6 +101,18 @@ Claude Code nimmt eine Sitzung von selbst wieder auf, wenn ein Nutzungslimit zur
 
 Ansonsten hält es sich heraus. Geschickt wird nichts, wenn Claude Code oder Sie schon weitergemacht haben oder wenn im Eingabefeld etwas halb getippt ist; nach höchstens zwei Versuchen sagt es Ihnen Bescheid. Dafür braucht es das Plugin, in einem Claude Code, das dessen Hooks-Modul lädt.
 
+## Neustart nach einem Update
+
+Claude Code installiert Updates im Hintergrund, aber eine laufende Sitzung bleibt beim alten Build, bis sie neu gestartet wird. In tmux kann Fluid das für dich übernehmen: Sobald ein neuerer Build installiert ist, wird eine Sitzung, mit der niemand verbunden ist, in der kein Turn läuft, deren Eingabefeld leer ist und in der zehn Minuten lang nichts passiert ist, mit `claude -r` im selben Gespräch neu gestartet, im selben Pane und Verzeichnis. Optionen, mit denen sie gestartet wurde (etwa `--model`), werden nicht übernommen, und auf denselben Build wird innerhalb von sechs Stunden nie zweimal neu gestartet.
+
+Standardmäßig ist es aus. Eingeschaltet wird es im `env` von `~/.claude/settings.json`:
+
+```json
+"env": { "AUTO_RESTART_TO_UPDATE": "on" }
+```
+
+Mit `dry` statt `on` schreibt es nur in die Sitzung, was es tun würde. Das setzt das Plugin voraus, in einem Claude Code, das dessen Hooks-Modul lädt, und tmux 3.0 oder neuer.
+
 ## Benachrichtigungen
 
 Fluid bleibt still, solange nichts Ihre Aufmerksamkeit braucht, und meldet sechs Dinge:

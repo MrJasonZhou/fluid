@@ -8,10 +8,11 @@
 import { describe, expect, mock, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 import type { On, SessionRateLimit } from 'claude-code'
-import { GRACE_MS, MAX_ATTEMPTS, NOTIFY_RETRY_MS, TICK_MS, VERIFY_MS, resetAt, toReading } from '../hooks/register'
+import { GRACE_MS, MAX_ATTEMPTS, NOTIFY_RETRY_MS, RESTART_CHECK_MS, RESTART_IDLE_MS, TICK_MS, VERIFY_MS, isNewer, parseVersion, resetAt, toReading } from '../hooks/register'
 
 const T0 = Date.parse('2026-10-15T00:00:00Z')
 const BIN = '/home/u/.fluid/fluid.sh'
+const ID = '0f8b5c2e-1234-4abc-9def-0123456789ab'
 
 type World = {
   // fluid.sh に渡した引数と標準入力
@@ -30,6 +31,14 @@ type World = {
   failNotify: number
   // ~/.fluid/fluid.sh があるか（/fluid:install の後か）
   isInstalled: boolean
+  // What the shell scripts of restart to update see: the pane, the claude on
+  // disk and how many clients are attached
+  tmux: { pane: string; onDisk: string; attached: string }
+  // The prompts of the scripts run with sh -c
+  scripts: string[]
+  // Called with each fluid.sh call, before it is answered
+  onRun?: (argv: string[]) => void
+  logs: string[]
 }
 
 function limitsAt(now: number, used: number, resetInMs: number): SessionRateLimit[] {
@@ -40,16 +49,31 @@ function limitsAt(now: number, used: number, resetInMs: number): SessionRateLimi
 }
 
 // エンジンの下の世界。どのイベントも、ここが最後に答える
-function world(on: On, limits: SessionRateLimit[] = []): World {
-  const w: World = { runs: [], submitted: [], env: {}, limits, draft: '', isInstalled: true, failNotify: 0, clock: mock.clock(on, { now: T0 }) }
+function world(on: On, limits: SessionRateLimit[] = [], env: Record<string, string> = {}): World {
+  const w: World = {
+    runs: [], submitted: [], env: {}, limits, draft: '', isInstalled: true, failNotify: 0, clock: mock.clock(on, { now: T0 }),
+    tmux: { pane: '', onDisk: '2.1.300', attached: '0' }, scripts: [], logs: [],
+  }
 
-  mock.env(on, { HOME: '/home/u' })
+  mock.env(on, { HOME: '/home/u', ...env })
+  mock.store(on)
   on('env.set', (_$, e) => {
     w.env[e.name] = e.value
     return { value: undefined }
   })
   on('process.run', (_$, e) => {
+    if (e.argv[0] === 'sh') {
+      const script = e.argv[2] ?? ''
+      w.scripts.push(script)
+      const stdout = script.includes('TMUX_PANE') ? w.tmux.pane
+        : script.includes('command -v') ? '/usr/bin/claude'
+        : script.includes('--version') ? `${w.tmux.onDisk} (Claude Code)`
+        : script.includes('session_attached') ? w.tmux.attached
+        : ''
+      return { value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+    }
     w.runs.push({ argv: [...e.argv], stdin: e.init?.stdin })
+    w.onRun?.([...e.argv])
     const isFailing = e.argv[1] === 'notify' && w.failNotify > 0
     if (isFailing) w.failNotify -= 1
     return { value: { exitCode: isFailing ? 1 : 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
@@ -64,6 +88,14 @@ function world(on: On, limits: SessionRateLimit[] = []): World {
     w.submitted.push(e.text)
     await w.onSubmit?.()
     return { text: e.text }
+  })
+
+  on('session.version', () => ({ value: { version: '2.1.300', base: '2.1.300' } }))
+  on('session.id', () => ({ value: ID }))
+  on('session.cwd', () => ({ value: '/work' }))
+  on('ui.log', (_$, e) => {
+    w.logs.push(e.text)
+    return { value: undefined }
   })
 
   on('session.start', (_$, e) => ({ cwd: e.cwd }))
@@ -341,5 +373,102 @@ describe('resume', () => {
     w.onRead = () => w.clock.sleep(TICK_MS + 5_000)
     await w.clock.advance(RESET_IN + GRACE_MS + 4 * TICK_MS)
     expect(w.submitted).toEqual(['continue'])
+  })
+})
+
+describe('restart to update', () => {
+  const NEWER = { pane: '%3', onDisk: '2.1.306', attached: '0' }
+  const IDLE = RESTART_IDLE_MS + RESTART_CHECK_MS
+  const respawns = (w: World) => w.scripts.filter(s => s.includes('respawn-pane'))
+
+  async function idle($: Engine, w: World, ms = IDLE) {
+    await $.session.start({ cwd: '/work', surface: 'terminal', isInteractive: true })
+    await w.clock.advance(ms)
+  }
+
+  test('reads the version claude --version prints', () => {
+    expect(parseVersion('2.1.306 (Claude Code)')).toBe('2.1.306')
+    expect(parseVersion('2.1.280-dev.20260920.t101500.sha1a2b3c4')).toBe('2.1.280-dev.20260920.t101500.sha1a2b3c4')
+    expect(parseVersion('command not found')).toBe(undefined)
+  })
+
+  test('only a later release counts as an update', () => {
+    expect(isNewer('2.1.306', '2.1.300')).toBe(true)
+    expect(isNewer('2.2.0', '2.1.999')).toBe(true)
+    expect(isNewer('2.1.10', '2.1.9')).toBe(true)
+    expect(isNewer('2.1.300', '2.1.306')).toBe(false)
+    expect(isNewer('2.1.300', '2.1.300')).toBe(false)
+    expect(isNewer('2.1.300-dev.20260920', '2.1.300')).toBe(false)
+    expect(isNewer('garbage', '2.1.300')).toBe(false)
+  })
+
+  test('off by default: runs nothing at all', async ($, on) => {
+    const w = world(on)
+    w.tmux = { ...NEWER }
+    await idle($, w)
+    expect(w.scripts).toEqual([])
+  })
+
+  test('restarts an idle, detached session in tmux once per build', async ($, on) => {
+    const w = world(on, [], { AUTO_RESTART_TO_UPDATE: 'on' })
+    w.tmux = { ...NEWER }
+    await idle($, w, IDLE + 10 * RESTART_CHECK_MS)
+    expect(respawns(w).length).toBe(1)
+    expect(w.runs.some(r => r.argv[1] === 'log' && /Restarting an idle session/.test(r.argv[3] ?? ''))).toBe(true)
+  })
+
+  test('dry only says what it would do, once', async ($, on) => {
+    const w = world(on, [], { AUTO_RESTART_TO_UPDATE: 'dry' })
+    w.tmux = { ...NEWER }
+    await idle($, w, IDLE + 10 * RESTART_CHECK_MS)
+    expect(respawns(w)).toEqual([])
+    expect(w.logs.filter(l => l.includes('would restart')).length).toBe(1)
+  })
+
+  test('leaves the session alone when anything says someone is there, or the build is not newer', async ($, on) => {
+    const w = world(on, [], { AUTO_RESTART_TO_UPDATE: 'on' })
+    await $.session.start({ cwd: '/work', surface: 'terminal', isInteractive: true })
+    const cases: (() => void)[] = [
+      () => { w.tmux = { ...NEWER, attached: '1' } },
+      () => { w.tmux = { ...NEWER }; w.draft = 'half a thought' },
+      () => { w.tmux = { ...NEWER, pane: '' } },
+      () => { w.tmux = { ...NEWER, onDisk: '2.1.300' } },
+      () => { w.tmux = { ...NEWER, onDisk: '2.1.299' } },
+      () => { w.tmux = { ...NEWER }; w.isInstalled = false },
+    ]
+    for (const set of cases) {
+      w.draft = ''
+      w.isInstalled = true
+      set()
+      await w.clock.advance(IDLE)
+    }
+    expect(respawns(w)).toEqual([])
+  })
+
+  test('someone coming back while it logs keeps the session', async ($, on) => {
+    const w = world(on, [], { AUTO_RESTART_TO_UPDATE: 'on' })
+    w.tmux = { ...NEWER }
+    // The log call before the last look: a person attaches meanwhile
+    w.onRun = argv => {
+      if (argv[1] === 'log' && /Restarting/.test(argv[3] ?? '')) w.tmux.attached = '1'
+    }
+    await idle($, w)
+    expect(respawns(w)).toEqual([])
+    expect(w.runs.some(r => r.argv[1] === 'log' && /came back/.test(r.argv[3] ?? ''))).toBe(true)
+  })
+
+  test('a running turn, or one that just ended, holds it back', async ($, on) => {
+    const w = world(on, [], { AUTO_RESTART_TO_UPDATE: 'on' })
+    w.tmux = { ...NEWER }
+    await $.session.start({ cwd: '/work', surface: 'terminal', isInteractive: true })
+    await $.turn.start({ text: 'go', turnId: 't1' })
+    await w.clock.advance(IDLE)
+    expect(respawns(w)).toEqual([])
+
+    await $.turn.complete({ answer: 'done', durationMs: 5, isAborted: false, turnId: 't1', reason: 'answer' })
+    await w.clock.advance(RESTART_IDLE_MS - RESTART_CHECK_MS)
+    expect(respawns(w)).toEqual([])
+    await w.clock.advance(2 * RESTART_CHECK_MS)
+    expect(respawns(w).length).toBe(1)
   })
 })

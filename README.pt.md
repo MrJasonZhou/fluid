@@ -101,6 +101,18 @@ O Claude Code retoma uma sessão sozinho quando um limite de uso é zerado ("Con
 
 No resto do tempo, ele não se mete. Nada é enviado se o Claude Code ou você já continuaram, ou se há algo digitado pela metade na caixa de entrada; ele tenta no máximo duas vezes e depois avisa você. Isso precisa do plugin, num Claude Code que carregue o módulo de hooks dele.
 
+## Reinício após uma atualização
+
+O Claude Code instala atualizações em segundo plano, mas uma sessão em execução continua na build antiga até ser reiniciada. No tmux, o Fluid pode fazer isso por você: depois que uma build mais nova é instalada, uma sessão à qual ninguém está conectado, sem um turno em andamento, com a caixa de entrada vazia e sem atividade há dez minutos é reiniciada com `claude -r` na mesma conversa, no mesmo pane e diretório. As opções com que ela foi iniciada (`--model`, por exemplo) não são mantidas, e a mesma build nunca provoca dois reinícios em seis horas.
+
+Vem desligado por padrão. Ative no `env` de `~/.claude/settings.json`:
+
+```json
+"env": { "AUTO_RESTART_TO_UPDATE": "on" }
+```
+
+Com `dry` em vez de `on`, ele só escreve na sessão o que faria. É preciso o plugin, num Claude Code que carregue seu módulo de hooks, e tmux 3.0 ou mais recente.
+
 ## Avisos
 
 O Fluid fica quieto enquanto nada precisa de você, e informa seis coisas:

@@ -101,6 +101,18 @@ Claude Code reprend une session de lui-même quand une limite d'usage se réinit
 
 Le reste du temps, il ne se mêle de rien. Rien n'est envoyé si Claude Code ou vous avez déjà repris, ou si quelque chose est à moitié saisi dans la zone de saisie ; il essaie deux fois au plus, puis vous prévient. Il faut pour cela le plugin, dans un Claude Code qui charge son module de hooks.
 
+## Redémarrage après une mise à jour
+
+Claude Code installe les mises à jour en arrière-plan, mais une session en cours reste sur l'ancienne version jusqu'à son redémarrage. Dans tmux, Fluid peut s'en charger : une fois une version plus récente installée, une session à laquelle personne n'est attaché, sans tour en cours, avec la zone de saisie vide et sans activité depuis dix minutes, est relancée avec `claude -r` sur la même conversation, dans le même pane et le même répertoire. Les options de lancement (`--model`, par exemple) ne sont pas reprises, et une même version ne déclenche jamais deux redémarrages en six heures.
+
+C'est désactivé par défaut. Pour l'activer, dans l'`env` de `~/.claude/settings.json` :
+
+```json
+"env": { "AUTO_RESTART_TO_UPDATE": "on" }
+```
+
+Avec `dry` au lieu de `on`, il se contente d'écrire dans la session ce qu'il ferait. Il faut le plugin, dans un Claude Code qui charge son module de hooks, et tmux 3.0 ou plus récent.
+
 ## Alertes
 
 Fluid reste silencieux tant que rien ne requiert votre attention, et ne signale que six choses :

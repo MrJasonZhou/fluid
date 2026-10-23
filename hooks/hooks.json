@@ -1,5 +1,5 @@
 {
-  "description": "Fluid: hand Claude Code's usage readings to Fluid and resume a session stopped on a usage limit, from inside Claude Code. Does nothing until /fluid:install has run.",
+  "description": "Fluid: hand Claude Code's usage readings to Fluid and resume a session stopped on a usage limit, from inside Claude Code; when turned on, restart an idle session in tmux onto a newly installed build. Does nothing until /fluid:install has run.",
   "modules": [
     "./register.ts"
   ]

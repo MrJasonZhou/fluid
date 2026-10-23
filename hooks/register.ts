@@ -244,6 +244,135 @@ async function turnStarted($: EngineInterface, state: State) {
   if (!isOwn) stopWatching(state)
 }
 
+// Restart to update: when Claude Code has installed a newer build in the
+// background, a session in tmux that nobody is attached to, with no turn
+// running, an empty prompt box and nothing done for RESTART_IDLE_MS, has tmux
+// replace its process with `claude -r <session id>`, then a shell.
+// AUTO_RESTART_TO_UPDATE in the settings' env: `on` restarts, `dry` only logs
+// what it would do, anything else (the default) does nothing.
+
+export const RESTART_CHECK_MS = 5 * 60_000
+export const RESTART_IDLE_MS = 10 * 60_000
+// A restart onto the same version is never tried twice within this window, so
+// a claude on PATH other than the running one cannot loop
+export const RESTART_RETRY_MS = 6 * 60 * 60_000
+
+type Restart = {
+  isTurnRunning: boolean
+  lastActivity: number
+  isChecking?: boolean
+  // Dry mode logs each target version once
+  loggedFor?: string
+  ticker?: { cancel: () => void }
+}
+
+// "2.1.306 (Claude Code)" -> "2.1.306"
+export function parseVersion(text: string): string | undefined {
+  return /^\s*(\d+\.\d+\.\d+\S*)/.exec(text)?.[1]
+}
+
+// Whether release a is past release b, on major.minor.patch alone: a build
+// of the same release (a -dev suffix) is not newer
+export function isNewer(a: string, b: string): boolean {
+  const parse = (v: string) => (/^(\d+)\.(\d+)\.(\d+)/.exec(v) ?? []).slice(1).map(Number)
+  const x = parse(a)
+  const y = parse(b)
+  if (x.length !== 3 || y.length !== 3) return false
+  for (let i = 0; i < 3; i++) if (x[i] !== y[i]) return x[i]! > y[i]!
+  return false
+}
+
+const SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+
+// Runs a script with its arguments as $1..., never spliced into the script
+async function sh($: EngineInterface, script: string, args: string[] = []): Promise<string | undefined> {
+  const r = await $.process.run(['sh', '-c', script, 'sh', ...args], { cwd: '/', timeoutMs: 10_000 })
+  return r.exitCode === 0 ? r.stdout.trim() : undefined
+}
+
+// Nobody is there: no client attached to the pane's session, nothing in the
+// prompt box, no turn running. Asked again right before the respawn, since a
+// person may come back while anything slow runs
+async function isUnattended($: EngineInterface, restart: Restart, pane: string): Promise<boolean> {
+  if (restart.isTurnRunning) return false
+  const attached = await sh($, 'tmux display -p -t "$1" "#{session_attached}"', [pane])
+  if (attached !== '0') return false
+  if ((await $.prompt.read()).text.trim() !== '') return false
+  return !restart.isTurnRunning
+}
+
+async function restartCheck($: EngineInterface, restart: Restart) {
+  const mode = await $.env.get('AUTO_RESTART_TO_UPDATE')
+  if (mode !== 'dry' && mode !== 'on') return
+  if (restart.isTurnRunning) return
+  const now = await $.clock.now()
+  if (now - restart.lastActivity < RESTART_IDLE_MS) return
+  if (!(await isInstalled($))) return
+
+  // The process environment, which $.env (the settings files) does not see
+  const pane = await sh($, 'printf %s "$TMUX_PANE"')
+  if (!pane) return
+
+  const claude = await sh($, 'command -v claude')
+  if (!claude) return
+  const onDisk = parseVersion((await sh($, '"$1" --version', [claude])) ?? '')
+  const running = (await $.session.version()).version
+  // Only forward: a claude on PATH older than the running one is not an update
+  if (onDisk === undefined || !isNewer(onDisk, running)) return
+
+  const last = (await $.store.get('lastRestart')) as { target?: string; at?: number } | undefined
+  if (last?.target === onDisk && last.at !== undefined && now - last.at < RESTART_RETRY_MS) return
+
+  if (!(await isUnattended($, restart, pane))) return
+
+  const id = await $.session.id()
+  if (!SESSION_ID.test(id)) return
+  const cwd = await $.session.cwd()
+
+  if (mode === 'dry') {
+    if (restart.loggedFor !== onDisk) {
+      restart.loggedFor = onDisk
+      $.ui.log(`restart to update (dry): would restart ${running} -> ${onDisk} in ${pane} as ${claude} -r ${id}`)
+    }
+    return
+  }
+
+  // Everything that waits comes before the last look, so a turn cannot start
+  // between it and the respawn. The record is taken back if it is not made
+  await fluid($, ['log', 'claude', `Restarting an idle session in tmux to update, ${running} -> ${onDisk}`])
+  await $.store.set('lastRestart', { target: onDisk, at: now, from: running, id })
+  if (!(await isUnattended($, restart, pane)) || restart.isTurnRunning) {
+    await $.store.delete('lastRestart')
+    void fluid($, ['log', 'claude', 'Someone came back to the session; not restarting it'])
+    return
+  }
+
+  $.ui.log(`restart to update: ${running} -> ${onDisk}`)
+  // tmux 3.0+ runs the trailing arguments as an argv, so nothing is quoted into
+  // a command line. The shell after claude keeps the pane usable if it fails
+  await sh($, 'tmux respawn-pane -k -t "$1" -c "$2" sh -c \'"$0" -r "$1"; exec "${SHELL:-sh}"\' "$3" "$4"',
+    [pane, cwd, claude, id])
+}
+
+// One check at a time; a failure is logged to the debug log and dropped, so
+// this can do nothing but never stop a session
+async function restartTick($: EngineInterface, restart: Restart) {
+  if (restart.isChecking) return
+  restart.isChecking = true
+  try {
+    await restartCheck($, restart)
+  } catch (err) {
+    $.ui.log(`restart to update: check failed: ${String(err)}`, { to: 'debug' })
+  } finally {
+    restart.isChecking = false
+  }
+}
+
+async function restartActivity($: EngineInterface, restart: Restart, isTurnRunning: boolean) {
+  restart.isTurnRunning = isTurnRunning
+  restart.lastActivity = await $.clock.now()
+}
+
 async function started($: EngineInterface, state: State) {
   await $.env.set('FLUID_MOD', '1')
   state.limits = (await $.session.usage()).rateLimits
@@ -252,9 +381,17 @@ async function started($: EngineInterface, state: State) {
 
 export const register: Register = on => {
   const state: State = { limits: [], isTurnRunning: false }
+  const restart: Restart = { isTurnRunning: false, lastActivity: 0 }
 
   on('session.start', async ($, e, next) => {
     const result = await next(e)
+    try {
+      await restartActivity($, restart, false)
+      restart.ticker?.cancel()
+      restart.ticker = $.clock.every(RESTART_CHECK_MS, () => void restartTick($, restart))
+    } catch {
+      // No ticker: the session runs as if restart to update were off
+    }
     await started($, state)
     return result
   })
@@ -269,13 +406,17 @@ export const register: Register = on => {
   })
 
   on('turn.start', async ($, e, next) => {
-    if (e.agentId === undefined) await turnStarted($, state)
+    if (e.agentId === undefined) {
+      await restartActivity($, restart, true).catch(() => {})
+      await turnStarted($, state)
+    }
     return next(e)
   })
 
   on('turn.complete', async ($, e, next) => {
     const result = await next(e)
     if (e.agentId === undefined) {
+      await restartActivity($, restart, false).catch(() => {})
       state.isTurnRunning = false
       // 送った continue が答えまで進んだ: 再開できた
       if (state.pending?.sentAt !== undefined && e.reason === 'answer') stopWatching(state)
@@ -293,6 +434,8 @@ export const register: Register = on => {
   }).catch(($, e, next) => next(e))
 
   on('session.end', ($, e, next) => {
+    restart.ticker?.cancel()
+    restart.ticker = undefined
     stopWatching(state)
     return next(e)
   })

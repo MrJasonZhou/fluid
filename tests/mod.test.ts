@@ -8,7 +8,7 @@
 import { describe, expect, mock, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 import type { On, SessionRateLimit } from 'claude-code'
-import { GRACE_MS, MAX_ATTEMPTS, NOTIFY_RETRY_MS, RESTART_CHECK_MS, RESTART_IDLE_MS, TICK_MS, VERIFY_MS, isNewer, parseVersion, resetAt, toReading } from '../hooks/register'
+import { GRACE_MS, MAX_ATTEMPTS, NOTIFY_RETRY_MS, RESTART_CHECK_MS, RESTART_IDLE_MS, TICK_MS, VERIFY_MS, isNewer, parseVersion, stamp, resetAt, toReading } from '../hooks/register'
 
 const T0 = Date.parse('2026-10-15T00:00:00Z')
 const BIN = '/home/u/.fluid/fluid.sh'
@@ -392,6 +392,11 @@ describe('restart to update', () => {
     expect(parseVersion('command not found')).toBe(undefined)
   })
 
+  test('stamps the local date and time to the minute', () => {
+    const d = new Date(2026, 9, 6, 4, 5, 59)
+    expect(stamp(d.getTime())).toBe('2026-10-06 04:05')
+  })
+
   test('only a later release counts as an update', () => {
     expect(isNewer('2.1.306', '2.1.300')).toBe(true)
     expect(isNewer('2.2.0', '2.1.999')).toBe(true)
@@ -415,6 +420,7 @@ describe('restart to update', () => {
     await idle($, w, IDLE + 10 * RESTART_CHECK_MS)
     expect(respawns(w).length).toBe(1)
     expect(w.runs.some(r => r.argv[1] === 'log' && /Restarting an idle session/.test(r.argv[3] ?? ''))).toBe(true)
+    expect(w.logs.some(l => /^restart to update: 2\.1\.300 -> 2\.1\.306 at \d{4}-\d{2}-\d{2} \d{2}:\d{2}$/.test(l))).toBe(true)
   })
 
   test('dry only says what it would do, once', async ($, on) => {

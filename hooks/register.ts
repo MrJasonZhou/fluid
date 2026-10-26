@@ -282,6 +282,13 @@ export function isNewer(a: string, b: string): boolean {
   return false
 }
 
+// Local date and time to the minute, 2026-10-26 14:03
+export function stamp(ms: number): string {
+  const d = new Date(ms)
+  const p = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
+}
+
 const SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
 // Runs a script with its arguments as $1..., never spliced into the script
@@ -332,7 +339,7 @@ async function restartCheck($: EngineInterface, restart: Restart) {
   if (mode === 'dry') {
     if (restart.loggedFor !== onDisk) {
       restart.loggedFor = onDisk
-      $.ui.log(`restart to update (dry): would restart ${running} -> ${onDisk} in ${pane} as ${claude} -r ${id}`)
+      $.ui.log(`restart to update (dry): would restart ${running} -> ${onDisk} at ${stamp(now)} in ${pane} as ${claude} -r ${id}`)
     }
     return
   }
@@ -347,7 +354,8 @@ async function restartCheck($: EngineInterface, restart: Restart) {
     return
   }
 
-  $.ui.log(`restart to update: ${running} -> ${onDisk}`)
+  // The time the check began, seconds ago: asking the clock again would wait
+  $.ui.log(`restart to update: ${running} -> ${onDisk} at ${stamp(now)}`)
   // tmux 3.0+ runs the trailing arguments as an argv, so nothing is quoted into
   // a command line. The shell after claude keeps the pane usable if it fails
   await sh($, 'tmux respawn-pane -k -t "$1" -c "$2" sh -c \'"$0" -r "$1"; exec "${SHELL:-sh}"\' "$3" "$4"',

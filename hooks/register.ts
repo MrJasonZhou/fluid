@@ -246,20 +246,24 @@ async function turnStarted($: EngineInterface, state: State) {
 
 // Restart to update: when Claude Code has installed a newer build in the
 // background, a session in tmux that nobody is attached to, with no turn
-// running, an empty prompt box and nothing done for RESTART_IDLE_MS, has tmux
-// replace its process with `claude -r <session id>`, then a shell.
+// running, nothing in flight or waiting to wake it, an empty prompt box and
+// nothing done for RESTART_IDLE_MS, has tmux replace its process with
+// `claude -r <session id>`, then a shell.
 // AUTO_RESTART_TO_UPDATE in the settings' env: `on` restarts, `dry` only logs
 // what it would do, anything else (the default) does nothing.
 
 export const RESTART_CHECK_MS = 5 * 60_000
 export const RESTART_IDLE_MS = 10 * 60_000
-// A restart onto the same version is never tried twice within this window, so
-// a claude on PATH other than the running one cannot loop
+// A session never tries a restart onto the same version twice within this
+// window, so a claude on PATH other than the running one cannot loop
 export const RESTART_RETRY_MS = 6 * 60 * 60_000
 
 type Restart = {
   isTurnRunning: boolean
   lastActivity: number
+  // As of the last Stop: background work still in flight, or a wakeup this
+  // session is waiting for
+  hasPendingWork?: boolean
   isChecking?: boolean
   // Dry mode logs each target version once
   loggedFor?: string
@@ -312,6 +316,10 @@ async function restartCheck($: EngineInterface, restart: Restart) {
   const mode = await $.env.get('AUTO_RESTART_TO_UPDATE')
   if (mode !== 'dry' && mode !== 'on') return
   if (restart.isTurnRunning) return
+  // A backgrounded command or subagent outlives the turn, and a session cron
+  // (CronCreate, ScheduleWakeup, /loop) means the session is waiting to be woken:
+  // the pane looks idle either way, but the respawn would take the work with it
+  if (restart.hasPendingWork) return
   const now = await $.clock.now()
   if (now - restart.lastActivity < RESTART_IDLE_MS) return
   if (!(await isInstalled($))) return
@@ -327,13 +335,16 @@ async function restartCheck($: EngineInterface, restart: Restart) {
   // Only forward: a claude on PATH older than the running one is not an update
   if (onDisk === undefined || !isNewer(onDisk, running)) return
 
-  const last = (await $.store.get('lastRestart')) as { target?: string; at?: number } | undefined
+  const id = await $.session.id()
+  if (!SESSION_ID.test(id)) return
+  // Kept per session: the guard is there to stop one session retrying the same
+  // target, not to let one restart hold every other idle session back
+  const key = `lastRestart:${id}`
+  const last = (await $.store.get(key)) as { target?: string; at?: number } | undefined
   if (last?.target === onDisk && last.at !== undefined && now - last.at < RESTART_RETRY_MS) return
 
   if (!(await isUnattended($, restart, pane))) return
 
-  const id = await $.session.id()
-  if (!SESSION_ID.test(id)) return
   const cwd = await $.session.cwd()
 
   if (mode === 'dry') {
@@ -347,9 +358,9 @@ async function restartCheck($: EngineInterface, restart: Restart) {
   // Everything that waits comes before the last look, so a turn cannot start
   // between it and the respawn. The record is taken back if it is not made
   await fluid($, ['log', 'claude', `Restarting an idle session in tmux to update, ${running} -> ${onDisk}`])
-  await $.store.set('lastRestart', { target: onDisk, at: now, from: running, id })
+  await $.store.set(key, { target: onDisk, at: now, from: running, id })
   if (!(await isUnattended($, restart, pane)) || restart.isTurnRunning) {
-    await $.store.delete('lastRestart')
+    await $.store.delete(key)
     void fluid($, ['log', 'claude', 'Someone came back to the session; not restarting it'])
     return
   }
@@ -433,6 +444,16 @@ export const register: Register = on => {
     }
     return result
   })
+
+  // 見るだけのフック: Stop が、まだ走っている背景の仕事と、この先この
+  // セッションを起こす予定を運んでくる。終われば、次のターンの Stop が直す
+  on('classic.Stop', async ($, e, next) => {
+    const result = await next(e)
+    if (e.agent_id === undefined) {
+      restart.hasPendingWork = (e.background_tasks?.length ?? 0) + (e.session_crons?.length ?? 0) > 0
+    }
+    return result
+  }).catch(($, e, next) => next(e))
 
   // 見るだけのフック: 失敗しても StopFailure はそのまま進める
   on('classic.StopFailure', async ($, e, next) => {

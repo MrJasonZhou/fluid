@@ -31,6 +31,8 @@ type World = {
   failNotify: number
   // ~/.fluid/fluid.sh があるか（/fluid:install の後か）
   isInstalled: boolean
+  // session.id が答える値。セッション別の記録を試すために変えられる
+  sessionId: string
   // What the shell scripts of restart to update see: the pane, the claude on
   // disk and how many clients are attached
   tmux: { pane: string; onDisk: string; attached: string }
@@ -51,7 +53,7 @@ function limitsAt(now: number, used: number, resetInMs: number): SessionRateLimi
 // エンジンの下の世界。どのイベントも、ここが最後に答える
 function world(on: On, limits: SessionRateLimit[] = [], env: Record<string, string> = {}): World {
   const w: World = {
-    runs: [], submitted: [], env: {}, limits, draft: '', isInstalled: true, failNotify: 0, clock: mock.clock(on, { now: T0 }),
+    runs: [], submitted: [], env: {}, limits, draft: '', isInstalled: true, failNotify: 0, sessionId: ID, clock: mock.clock(on, { now: T0 }),
     tmux: { pane: '', onDisk: '2.1.300', attached: '0' }, scripts: [], logs: [],
   }
 
@@ -91,7 +93,7 @@ function world(on: On, limits: SessionRateLimit[] = [], env: Record<string, stri
   })
 
   on('session.version', () => ({ value: { version: '2.1.300', base: '2.1.300' } }))
-  on('session.id', () => ({ value: ID }))
+  on('session.id', () => ({ value: w.sessionId }))
   on('session.cwd', () => ({ value: '/work' }))
   on('ui.log', (_$, e) => {
     w.logs.push(e.text)
@@ -102,6 +104,7 @@ function world(on: On, limits: SessionRateLimit[] = [], env: Record<string, stri
   on('session.measure', (_$, e) => ({ changed: e.changed }))
   on('turn.start', (_$, e) => ({ turnId: e.turnId }))
   on('turn.complete', (_$, e) => ({ text: e.answer }))
+  on('classic.Stop', () => ({}))
   on('classic.StopFailure', () => ({}))
   on('session.end', (_$, e) => ({ sessionId: e.sessionId }))
 
@@ -421,6 +424,58 @@ describe('restart to update', () => {
     expect(respawns(w).length).toBe(1)
     expect(w.runs.some(r => r.argv[1] === 'log' && /Restarting an idle session/.test(r.argv[3] ?? ''))).toBe(true)
     expect(w.logs.some(l => /^restart to update: 2\.1\.300 -> 2\.1\.306 at \d{4}-\d{2}-\d{2} \d{2}:\d{2}$/.test(l))).toBe(true)
+  })
+
+  test('once per build is per session: another idle session still gets its restart', async ($, on) => {
+    const w = world(on, [], { AUTO_RESTART_TO_UPDATE: 'on' })
+    w.tmux = { ...NEWER }
+    await idle($, w)
+    expect(respawns(w).length).toBe(1)
+    // 同じ版へ二度は上げない。ただしそれは、このセッションの話
+    await w.clock.advance(IDLE)
+    expect(respawns(w).length).toBe(1)
+    // 別のセッションは、その記録に縛られない
+    w.sessionId = '1a2b3c4d-5678-4abc-9def-abcdef012345'
+    await w.clock.advance(IDLE)
+    expect(respawns(w).length).toBe(2)
+  })
+
+  test('background work still in flight holds the session', async ($, on) => {
+    const w = world(on, [], { AUTO_RESTART_TO_UPDATE: 'on' })
+    w.tmux = { ...NEWER }
+    await $.session.start({ cwd: '/work', surface: 'terminal', isInteractive: true })
+    // ターンは終わったが、背景のシェルはまだ走っている
+    await $.classic.Stop({ background_tasks: [{ id: 'b1', type: 'shell', status: 'running', description: 'npm run build' }] })
+    await w.clock.advance(IDLE)
+    expect(respawns(w)).toEqual([])
+    // 仕事が終われば、次の Stop がそう言う
+    await $.classic.Stop({ background_tasks: [] })
+    await w.clock.advance(IDLE)
+    expect(respawns(w).length).toBe(1)
+  })
+
+  test('a wakeup it is waiting for holds the session', async ($, on) => {
+    const w = world(on, [], { AUTO_RESTART_TO_UPDATE: 'on' })
+    w.tmux = { ...NEWER }
+    await $.session.start({ cwd: '/work', surface: 'terminal', isInteractive: true })
+    // /loop の途中: 背景の仕事はないが、自分で予約した起床を待っている
+    await $.classic.Stop({ session_crons: [{ id: 'c1', schedule: '*/20 * * * *', recurring: true, prompt: 'check CI' }] })
+    await w.clock.advance(IDLE)
+    expect(respawns(w)).toEqual([])
+    // 予定がなくなれば、普通の空いたセッション
+    await $.classic.Stop({ session_crons: [] })
+    await w.clock.advance(IDLE)
+    expect(respawns(w).length).toBe(1)
+  })
+
+  test("a subagent's own Stop does not speak for the session", async ($, on) => {
+    const w = world(on, [], { AUTO_RESTART_TO_UPDATE: 'on' })
+    w.tmux = { ...NEWER }
+    await $.session.start({ cwd: '/work', surface: 'terminal', isInteractive: true })
+    // 子エージェントの Stop は、親のセッションの話ではない
+    await $.classic.Stop({ agent_id: 'sub-1', background_tasks: [{ id: 'b2', type: 'subagent', status: 'running', description: 'review' }], session_crons: [] })
+    await w.clock.advance(IDLE)
+    expect(respawns(w).length).toBe(1)
   })
 
   test('dry only says what it would do, once', async ($, on) => {

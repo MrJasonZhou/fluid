@@ -103,7 +103,7 @@ Ansonsten hält es sich heraus. Geschickt wird nichts, wenn Claude Code oder Sie
 
 ## Neustart nach einem Update
 
-Claude Code installiert Updates im Hintergrund, aber eine laufende Sitzung bleibt beim alten Build, bis sie neu gestartet wird. In tmux kann Fluid das für dich übernehmen: Sobald ein neuerer Build installiert ist, wird eine Sitzung, mit der niemand verbunden ist, in der kein Turn läuft, deren Eingabefeld leer ist und in der zehn Minuten lang nichts passiert ist, mit `claude -r` im selben Gespräch neu gestartet, im selben Pane und Verzeichnis. Optionen, mit denen sie gestartet wurde (etwa `--model`), werden nicht übernommen, und auf denselben Build wird innerhalb von sechs Stunden nie zweimal neu gestartet.
+Claude Code installiert Updates im Hintergrund, aber eine laufende Sitzung bleibt beim alten Build, bis sie neu gestartet wird. In tmux kann Fluid das für dich übernehmen: Sobald ein neuerer Build installiert ist, wird eine Sitzung, mit der niemand verbunden ist, in der kein Turn läuft, deren Eingabefeld leer ist, in der keine Hintergrundarbeit läuft, die auf keinen Weckruf wartet und in der zehn Minuten lang nichts passiert ist, mit `claude -r` im selben Gespräch neu gestartet, im selben Pane und Verzeichnis. Optionen, mit denen sie gestartet wurde (etwa `--model`), werden nicht übernommen, und eine Sitzung wird innerhalb von sechs Stunden nie zweimal auf denselben Build neu gestartet.
 
 Standardmäßig ist es aus. Eingeschaltet wird es im `env` von `~/.claude/settings.json`:
 

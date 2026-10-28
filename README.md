@@ -103,7 +103,7 @@ Otherwise it stays out of the way. Nothing is sent if Claude Code or you have al
 
 ## Restart to update
 
-Claude Code installs updates in the background, but a running session stays on the old build until it is restarted. In tmux, Fluid can do that for you: once a newer build is installed, a session that nobody is attached to, with no turn running, nothing in the prompt box, no background work in flight, nothing waiting to wake it and nothing done for ten minutes, is restarted with `claude -r` on the same conversation, in the same pane and directory. Where Claude Code has its own `/restart` (still rolling out to accounts), Fluid runs that instead, which keeps the options the session was started with; `claude -r` does not carry them over (`--model`, say). A session never restarts onto the same build twice within six hours.
+Claude Code installs updates in the background, but a running session stays on the old build until it is restarted. In tmux, Fluid can do that for you: once a newer build is installed, a session that nobody is attached to, with no turn running, nothing in the prompt box, no background work in flight, nothing waiting to wake it and nothing done for ten minutes, is restarted with `claude -r` on the same conversation, in the same pane and directory. Options it was started with (`--model`, say) are not carried over, and a session never restarts onto the same build twice within six hours.
 
 It is off by default. Turn it on in the `env` of `~/.claude/settings.json`:
 

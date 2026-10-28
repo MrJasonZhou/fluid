@@ -103,7 +103,7 @@ No resto do tempo, ele não se mete. Nada é enviado se o Claude Code ou você j
 
 ## Reinício após uma atualização
 
-O Claude Code instala atualizações em segundo plano, mas uma sessão em execução continua na build antiga até ser reiniciada. No tmux, o Fluid pode fazer isso por você: depois que uma build mais nova é instalada, uma sessão à qual ninguém está conectado, sem um turno em andamento, com a caixa de entrada vazia, sem trabalho em segundo plano, sem nenhum despertar pendente e sem atividade há dez minutos é reiniciada com `claude -r` na mesma conversa, no mesmo pane e diretório. As opções com que ela foi iniciada (`--model`, por exemplo) não são mantidas, e uma mesma sessão nunca reinicia duas vezes na mesma build em seis horas.
+O Claude Code instala atualizações em segundo plano, mas uma sessão em execução continua na build antiga até ser reiniciada. No tmux, o Fluid pode fazer isso por você: depois que uma build mais nova é instalada, uma sessão à qual ninguém está conectado, sem um turno em andamento, com a caixa de entrada vazia, sem trabalho em segundo plano, sem nenhum despertar pendente e sem atividade há dez minutos é reiniciada com `claude -r` na mesma conversa, no mesmo pane e diretório. Onde o Claude Code tem o próprio `/restart` (ainda sendo liberado aos poucos para as contas), o Fluid usa esse, que mantém as opções com que a sessão foi iniciada; `claude -r` não as mantém (`--model`, por exemplo). Uma mesma sessão nunca reinicia duas vezes na mesma build em seis horas.
 
 Vem desligado por padrão. Ative no `env` de `~/.claude/settings.json`:
 

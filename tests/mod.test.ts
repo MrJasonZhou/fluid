@@ -41,6 +41,12 @@ type World = {
   // Called with each fluid.sh call, before it is answered
   onRun?: (argv: string[]) => void
   logs: string[]
+  // Claude Code's own /restart: whether it is listed, and whether it answers
+  // (a refusal) instead of restarting, which never returns
+  hasRestart: boolean
+  restartAnswers: boolean
+  // The slash commands run
+  commandsRun: string[]
 }
 
 function limitsAt(now: number, used: number, resetInMs: number): SessionRateLimit[] {
@@ -55,6 +61,7 @@ function world(on: On, limits: SessionRateLimit[] = [], env: Record<string, stri
   const w: World = {
     runs: [], submitted: [], env: {}, limits, draft: '', isInstalled: true, failNotify: 0, sessionId: ID, clock: mock.clock(on, { now: T0 }),
     tmux: { pane: '', onDisk: '2.1.300', attached: '0' }, scripts: [], logs: [],
+    hasRestart: false, restartAnswers: false, commandsRun: [],
   }
 
   mock.env(on, { HOME: '/home/u', ...env })
@@ -95,6 +102,17 @@ function world(on: On, limits: SessionRateLimit[] = [], env: Record<string, stri
   on('session.version', () => ({ value: { version: '2.1.300', base: '2.1.300' } }))
   on('session.id', () => ({ value: w.sessionId }))
   on('session.cwd', () => ({ value: '/work' }))
+  on('command.list', () => ({
+    value: [
+      { name: 'status', description: 'Show status', source: 'builtin' },
+      ...(w.hasRestart ? [{ name: 'restart', description: 'Restart on 2.1.306 and keep this session', source: 'builtin' }] : []),
+    ],
+  }))
+  on('command.run', async (_$, e) => {
+    w.commandsRun.push(e.command)
+    if (e.command === 'restart' && !w.restartAnswers) await w.clock.sleep(1e12)
+    return { text: "this session has restrictions a restart can't carry over" }
+  })
   on('ui.log', (_$, e) => {
     w.logs.push(e.text)
     return { value: undefined }
@@ -388,6 +406,41 @@ describe('restart to update', () => {
     await $.session.start({ cwd: '/work', surface: 'terminal', isInteractive: true })
     await w.clock.advance(ms)
   }
+
+  test("uses Claude Code's own /restart where it is there, not tmux", async ($, on) => {
+    const w = world(on, [], { AUTO_RESTART_TO_UPDATE: 'on' })
+    w.tmux = { ...NEWER }
+    w.hasRestart = true
+    // The first look that finds it idle runs /restart, which never returns
+    await idle($, w, IDLE + 3 * RESTART_CHECK_MS)
+    expect(w.commandsRun).toEqual(['restart'])
+    expect(respawns(w)).toEqual([])
+  })
+
+  test('a /restart that answers did not restart: tmux the next time', async ($, on) => {
+    const w = world(on, [], { AUTO_RESTART_TO_UPDATE: 'on' })
+    w.tmux = { ...NEWER }
+    w.hasRestart = true
+    w.restartAnswers = true
+    // Looks every RESTART_CHECK_MS: the first idle one is at RESTART_IDLE_MS
+    await idle($, w, RESTART_IDLE_MS)
+    expect(w.commandsRun).toEqual(['restart'])
+    expect(respawns(w)).toEqual([])
+    expect(w.runs.some(r => r.argv[1] === 'log' && /did not restart/.test(r.argv[3] ?? ''))).toBe(true)
+
+    await w.clock.advance(RESTART_CHECK_MS)
+    expect(w.commandsRun).toEqual(['restart'])
+    expect(respawns(w).length).toBe(1)
+  })
+
+  test('dry says which way it would restart', async ($, on) => {
+    const w = world(on, [], { AUTO_RESTART_TO_UPDATE: 'dry' })
+    w.tmux = { ...NEWER }
+    w.hasRestart = true
+    await idle($, w)
+    expect(w.logs.some(l => l.includes('would restart') && l.endsWith('with /restart'))).toBe(true)
+    expect(w.commandsRun).toEqual([])
+  })
 
   test('reads the version claude --version prints', () => {
     expect(parseVersion('2.1.306 (Claude Code)')).toBe('2.1.306')

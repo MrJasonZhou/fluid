@@ -103,7 +103,7 @@ Le reste du temps, il ne se mêle de rien. Rien n'est envoyé si Claude Code ou 
 
 ## Redémarrage après une mise à jour
 
-Claude Code installe les mises à jour en arrière-plan, mais une session en cours reste sur l'ancienne version jusqu'à son redémarrage. Dans tmux, Fluid peut s'en charger : une fois une version plus récente installée, une session à laquelle personne n'est attaché, sans tour en cours, avec la zone de saisie vide, sans travail en arrière-plan, sans réveil programmé en attente et sans activité depuis dix minutes, est relancée avec `claude -r` sur la même conversation, dans le même pane et le même répertoire. Les options de lancement (`--model`, par exemple) ne sont pas reprises, et une même session ne redémarre jamais deux fois vers la même version en six heures.
+Claude Code installe les mises à jour en arrière-plan, mais une session en cours reste sur l'ancienne version jusqu'à son redémarrage. Dans tmux, Fluid peut s'en charger : une fois une version plus récente installée, une session à laquelle personne n'est attaché, sans tour en cours, avec la zone de saisie vide, sans travail en arrière-plan, sans réveil programmé en attente et sans activité depuis dix minutes, est relancée avec `claude -r` sur la même conversation, dans le même pane et le même répertoire. Là où Claude Code a son propre `/restart` (encore en cours de déploiement selon les comptes), Fluid l'utilise à la place, ce qui conserve les options de lancement de la session ; `claude -r` ne les reprend pas (`--model`, par exemple). Une même session ne redémarre jamais deux fois vers la même version en six heures.
 
 C'est désactivé par défaut. Pour l'activer, dans l'`env` de `~/.claude/settings.json` :
 

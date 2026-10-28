@@ -103,7 +103,7 @@ Per il resto non si intromette. Non viene inviato nulla se Claude Code o tu avet
 
 ## Riavvio dopo un aggiornamento
 
-Claude Code installa gli aggiornamenti in background, ma una sessione in corso resta sulla vecchia build finché non viene riavviata. In tmux, Fluid può farlo al posto tuo: una volta installata una build più recente, una sessione a cui nessuno è collegato, senza un turno in corso, con la casella di input vuota, senza lavoro in background, senza alcun risveglio in attesa e senza attività da dieci minuti viene riavviata con `claude -r` sulla stessa conversazione, nello stesso pane e nella stessa directory. Le opzioni con cui era stata avviata (`--model`, per esempio) non vengono riportate, e una stessa sessione non si riavvia mai due volte sulla stessa build nell'arco di sei ore.
+Claude Code installa gli aggiornamenti in background, ma una sessione in corso resta sulla vecchia build finché non viene riavviata. In tmux, Fluid può farlo al posto tuo: una volta installata una build più recente, una sessione a cui nessuno è collegato, senza un turno in corso, con la casella di input vuota, senza lavoro in background, senza alcun risveglio in attesa e senza attività da dieci minuti viene riavviata con `claude -r` sulla stessa conversazione, nello stesso pane e nella stessa directory. Dove Claude Code ha il suo `/restart` (ancora in distribuzione graduale agli account), Fluid usa quello, che mantiene le opzioni con cui la sessione era stata avviata; `claude -r` non le riporta (`--model`, per esempio). Una stessa sessione non si riavvia mai due volte sulla stessa build nell'arco di sei ore.
 
 È disattivato per impostazione predefinita. Si attiva nell'`env` di `~/.claude/settings.json`:
 

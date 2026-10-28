@@ -264,6 +264,8 @@ type Restart = {
   // As of the last Stop: background work still in flight, or a wakeup this
   // session is waiting for
   hasPendingWork?: boolean
+  // Claude Code's own /restart refused to run once: tmux from then on
+  isNativeBroken?: boolean
   isChecking?: boolean
   // Dry mode logs each target version once
   loggedFor?: string
@@ -312,6 +314,16 @@ async function isUnattended($: EngineInterface, restart: Restart, pane: string):
   return !restart.isTurnRunning
 }
 
+// Claude Code's own /restart (rolling out from 2.1.31x) relaunches on the
+// newly installed build in the same terminal and carries the options the
+// session was started with, which `claude -r` does not. Listed only where it
+// is enabled for the account
+async function hasNativeRestart($: EngineInterface, restart: Restart): Promise<boolean> {
+  if (restart.isNativeBroken) return false
+  const commands = await $.command.list()
+  return commands.some(c => c.name === 'restart' && c.source === 'builtin')
+}
+
 async function restartCheck($: EngineInterface, restart: Restart) {
   const mode = await $.env.get('AUTO_RESTART_TO_UPDATE')
   if (mode !== 'dry' && mode !== 'on') return
@@ -346,11 +358,13 @@ async function restartCheck($: EngineInterface, restart: Restart) {
   if (!(await isUnattended($, restart, pane))) return
 
   const cwd = await $.session.cwd()
+  const isNative = await hasNativeRestart($, restart)
 
   if (mode === 'dry') {
     if (restart.loggedFor !== onDisk) {
       restart.loggedFor = onDisk
-      $.ui.log(`restart to update (dry): would restart ${running} -> ${onDisk} at ${stamp(now)} in ${pane} as ${claude} -r ${id}`)
+      const how = isNative ? 'with /restart' : `in ${pane} as ${claude} -r ${id}`
+      $.ui.log(`restart to update (dry): would restart ${running} -> ${onDisk} at ${stamp(now)} ${how}`)
     }
     return
   }
@@ -367,6 +381,21 @@ async function restartCheck($: EngineInterface, restart: Restart) {
 
   // The time the check began, seconds ago: asking the clock again would wait
   $.ui.log(`restart to update: ${running} -> ${onDisk} at ${stamp(now)}`)
+  if (isNative) {
+    // Runs as if typed, once the session is idle. A restart that happens never
+    // returns: this process waits on the new one, then exits with it. So any
+    // answer, or a refusal, means it did not restart; the next look uses tmux
+    let outcome: string
+    try {
+      outcome = (await $.command.run({ command: 'restart' })).text ?? 'no output'
+    } catch (err) {
+      outcome = String(err)
+    }
+    restart.isNativeBroken = true
+    await $.store.delete(key)
+    void fluid($, ['log', 'claude', `Claude Code's /restart did not restart the session (${outcome}); trying tmux next time`])
+    return
+  }
   // tmux 3.0+ runs the trailing arguments as an argv, so nothing is quoted into
   // a command line. The shell after claude keeps the pane usable if it fails
   await sh($, 'tmux respawn-pane -k -t "$1" -c "$2" sh -c \'"$0" -r "$1"; exec "${SHELL:-sh}"\' "$3" "$4"',

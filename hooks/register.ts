@@ -301,13 +301,23 @@ async function sh($: EngineInterface, script: string, args: string[] = []): Prom
   return r.exitCode === 0 ? r.stdout.trim() : undefined
 }
 
-// Nobody is there: no client attached to the pane's session, nothing in the
-// prompt box, no turn running. Asked again right before the respawn, since a
-// person may come back while anything slow runs
-async function isUnattended($: EngineInterface, restart: Restart, pane: string): Promise<boolean> {
+// Whether any client attached to the session typed within RESTART_IDLE_MS.
+// A client silent that long counts as gone: an ssh connection that dropped
+// without a FIN leaves its tmux client attached until TCP gives up, hours later
+export function hasLiveClient(activity: string, now: number): boolean {
+  return activity.split('\n').some(line => {
+    const at = Number(line.trim())
+    return line.trim() !== '' && (!Number.isFinite(at) || now - at * 1000 < RESTART_IDLE_MS)
+  })
+}
+
+// Nobody is there: no client attached to the pane's session that has typed
+// lately, nothing in the prompt box, no turn running. Asked again right before
+// the respawn, since a person may come back while anything slow runs
+async function isUnattended($: EngineInterface, restart: Restart, pane: string, now: number): Promise<boolean> {
   if (restart.isTurnRunning) return false
-  const attached = await sh($, 'tmux display -p -t "$1" "#{session_attached}"', [pane])
-  if (attached !== '0') return false
+  const activity = await sh($, 'tmux list-clients -t "$1" -F "#{client_activity}"', [pane])
+  if (activity === undefined || hasLiveClient(activity, now)) return false
   if ((await $.prompt.read()).text.trim() !== '') return false
   return !restart.isTurnRunning
 }
@@ -343,7 +353,7 @@ async function restartCheck($: EngineInterface, restart: Restart) {
   const last = (await $.store.get(key)) as { target?: string; at?: number } | undefined
   if (last?.target === onDisk && last.at !== undefined && now - last.at < RESTART_RETRY_MS) return
 
-  if (!(await isUnattended($, restart, pane))) return
+  if (!(await isUnattended($, restart, pane, now))) return
 
   const cwd = await $.session.cwd()
 
@@ -359,7 +369,7 @@ async function restartCheck($: EngineInterface, restart: Restart) {
   // between it and the respawn. The record is taken back if it is not made
   await fluid($, ['log', 'claude', `Restarting an idle session in tmux to update, ${running} -> ${onDisk}`])
   await $.store.set(key, { target: onDisk, at: now, from: running, id })
-  if (!(await isUnattended($, restart, pane)) || restart.isTurnRunning) {
+  if (!(await isUnattended($, restart, pane, now)) || restart.isTurnRunning) {
     await $.store.delete(key)
     void fluid($, ['log', 'claude', 'Someone came back to the session; not restarting it'])
     return

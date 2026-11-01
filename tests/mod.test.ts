@@ -8,7 +8,7 @@
 import { describe, expect, mock, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 import type { On, SessionRateLimit } from 'claude-code'
-import { GRACE_MS, MAX_ATTEMPTS, NOTIFY_RETRY_MS, RESTART_CHECK_MS, RESTART_IDLE_MS, TICK_MS, VERIFY_MS, isNewer, parseVersion, stamp, resetAt, toReading } from '../hooks/register'
+import { GRACE_MS, MAX_ATTEMPTS, NOTIFY_RETRY_MS, RESTART_CHECK_MS, RESTART_IDLE_MS, TICK_MS, VERIFY_MS, hasLiveClient, isNewer, parseVersion, stamp, resetAt, toReading } from '../hooks/register'
 
 const T0 = Date.parse('2026-10-15T00:00:00Z')
 const BIN = '/home/u/.fluid/fluid.sh'
@@ -34,8 +34,8 @@ type World = {
   // session.id が答える値。セッション別の記録を試すために変えられる
   sessionId: string
   // What the shell scripts of restart to update see: the pane, the claude on
-  // disk and how many clients are attached
-  tmux: { pane: string; onDisk: string; attached: string }
+  // disk and the last keypress (epoch seconds) of each attached client
+  tmux: { pane: string; onDisk: string; clients: string }
   // The prompts of the scripts run with sh -c
   scripts: string[]
   // Called with each fluid.sh call, before it is answered
@@ -54,7 +54,7 @@ function limitsAt(now: number, used: number, resetInMs: number): SessionRateLimi
 function world(on: On, limits: SessionRateLimit[] = [], env: Record<string, string> = {}): World {
   const w: World = {
     runs: [], submitted: [], env: {}, limits, draft: '', isInstalled: true, failNotify: 0, sessionId: ID, clock: mock.clock(on, { now: T0 }),
-    tmux: { pane: '', onDisk: '2.1.300', attached: '0' }, scripts: [], logs: [],
+    tmux: { pane: '', onDisk: '2.1.300', clients: '' }, scripts: [], logs: [],
   }
 
   mock.env(on, { HOME: '/home/u', ...env })
@@ -70,7 +70,7 @@ function world(on: On, limits: SessionRateLimit[] = [], env: Record<string, stri
       const stdout = script.includes('TMUX_PANE') ? w.tmux.pane
         : script.includes('command -v') ? '/usr/bin/claude'
         : script.includes('--version') ? `${w.tmux.onDisk} (Claude Code)`
-        : script.includes('session_attached') ? w.tmux.attached
+        : script.includes('list-clients') ? w.tmux.clients
         : ''
       return { value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
     }
@@ -380,7 +380,10 @@ describe('resume', () => {
 })
 
 describe('restart to update', () => {
-  const NEWER = { pane: '%3', onDisk: '2.1.306', attached: '0' }
+  const NEWER = { pane: '%3', onDisk: '2.1.306', clients: '' }
+  // A client that just typed, and one silent since long before the session started
+  const LIVE = '9999999999'
+  const STALE = String(Math.floor(T0 / 1000) - 3600)
   const IDLE = RESTART_IDLE_MS + RESTART_CHECK_MS
   const respawns = (w: World) => w.scripts.filter(s => s.includes('respawn-pane'))
 
@@ -408,6 +411,16 @@ describe('restart to update', () => {
     expect(isNewer('2.1.300', '2.1.300')).toBe(false)
     expect(isNewer('2.1.300-dev.20260920', '2.1.300')).toBe(false)
     expect(isNewer('garbage', '2.1.300')).toBe(false)
+  })
+
+  test('a client counts as there only if it typed within the idle window', () => {
+    const now = 1_000_000_000_000
+    const s = (ms: number) => String(Math.floor((now - ms) / 1000))
+    expect(hasLiveClient('', now)).toBe(false)
+    expect(hasLiveClient(s(RESTART_IDLE_MS + 60_000), now)).toBe(false)
+    expect(hasLiveClient(`${s(RESTART_IDLE_MS + 60_000)}\n${s(60_000)}`, now)).toBe(true)
+    // Anything it cannot read is taken as someone there
+    expect(hasLiveClient('garbage', now)).toBe(true)
   })
 
   test('off by default: runs nothing at all', async ($, on) => {
@@ -478,6 +491,13 @@ describe('restart to update', () => {
     expect(respawns(w).length).toBe(1)
   })
 
+  test('a client attached but silent since before the idle window does not hold it', async ($, on) => {
+    const w = world(on, [], { AUTO_RESTART_TO_UPDATE: 'on' })
+    w.tmux = { ...NEWER, clients: STALE }
+    await idle($, w)
+    expect(respawns(w).length).toBe(1)
+  })
+
   test('dry only says what it would do, once', async ($, on) => {
     const w = world(on, [], { AUTO_RESTART_TO_UPDATE: 'dry' })
     w.tmux = { ...NEWER }
@@ -490,7 +510,8 @@ describe('restart to update', () => {
     const w = world(on, [], { AUTO_RESTART_TO_UPDATE: 'on' })
     await $.session.start({ cwd: '/work', surface: 'terminal', isInteractive: true })
     const cases: (() => void)[] = [
-      () => { w.tmux = { ...NEWER, attached: '1' } },
+      () => { w.tmux = { ...NEWER, clients: LIVE } },
+      () => { w.tmux = { ...NEWER, clients: `${STALE}\n${LIVE}` } },
       () => { w.tmux = { ...NEWER }; w.draft = 'half a thought' },
       () => { w.tmux = { ...NEWER, pane: '' } },
       () => { w.tmux = { ...NEWER, onDisk: '2.1.300' } },
@@ -511,7 +532,7 @@ describe('restart to update', () => {
     w.tmux = { ...NEWER }
     // The log call before the last look: a person attaches meanwhile
     w.onRun = argv => {
-      if (argv[1] === 'log' && /Restarting/.test(argv[3] ?? '')) w.tmux.attached = '1'
+      if (argv[1] === 'log' && /Restarting/.test(argv[3] ?? '')) w.tmux.clients = LIVE
     }
     await idle($, w)
     expect(respawns(w)).toEqual([])

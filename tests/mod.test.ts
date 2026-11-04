@@ -36,8 +36,9 @@ type World = {
   // What the shell scripts of restart to update see: the pane, the claude on
   // disk and the last keypress (epoch seconds) of each attached client
   tmux: { pane: string; onDisk: string; clients: string }
-  // The prompts of the scripts run with sh -c
+  // The prompts of the scripts run with sh -c, and the arguments of each
   scripts: string[]
+  scriptArgs: string[][]
   // Called with each fluid.sh call, before it is answered
   onRun?: (argv: string[]) => void
   logs: string[]
@@ -51,14 +52,14 @@ function limitsAt(now: number, used: number, resetInMs: number): SessionRateLimi
 }
 
 // エンジンの下の世界。どのイベントも、ここが最後に答える
-function world(on: On, limits: SessionRateLimit[] = [], env: Record<string, string> = {}): World {
+function world(on: On, limits: SessionRateLimit[] = [], env: Record<string, string> = {}, stored: Record<string, unknown> = {}): World {
   const w: World = {
     runs: [], submitted: [], env: {}, limits, draft: '', isInstalled: true, failNotify: 0, sessionId: ID, clock: mock.clock(on, { now: T0 }),
-    tmux: { pane: '', onDisk: '2.1.300', clients: '' }, scripts: [], logs: [],
+    tmux: { pane: '', onDisk: '2.1.300', clients: '' }, scripts: [], scriptArgs: [], logs: [],
   }
 
   mock.env(on, { HOME: '/home/u', ...env })
-  mock.store(on)
+  mock.store(on, stored)
   on('env.set', (_$, e) => {
     w.env[e.name] = e.value
     return { value: undefined }
@@ -67,6 +68,7 @@ function world(on: On, limits: SessionRateLimit[] = [], env: Record<string, stri
     if (e.argv[0] === 'sh') {
       const script = e.argv[2] ?? ''
       w.scripts.push(script)
+      w.scriptArgs.push(e.argv.slice(4))
       const stdout = script.includes('TMUX_PANE') ? w.tmux.pane
         : script.includes('command -v') ? '/usr/bin/claude'
         : script.includes('--version') ? `${w.tmux.onDisk} (Claude Code)`
@@ -107,6 +109,7 @@ function world(on: On, limits: SessionRateLimit[] = [], env: Record<string, stri
   on('classic.Stop', () => ({}))
   on('classic.StopFailure', () => ({}))
   on('session.end', (_$, e) => ({ sessionId: e.sessionId }))
+  on('command.run', () => ({ text: '' }))
 
   return w
 }
@@ -496,6 +499,54 @@ describe('restart to update', () => {
     w.tmux = { ...NEWER, clients: STALE }
     await idle($, w)
     expect(respawns(w).length).toBe(1)
+  })
+
+  test('says once per build why a session is not restarting, and nothing without an update', async ($, on) => {
+    const w = world(on, [], { AUTO_RESTART_TO_UPDATE: 'on' })
+    const held = () => w.runs.filter(r => r.argv[1] === 'log' && /^Not restarting session/.test(r.argv[3] ?? '')).map(r => r.argv[3])
+    w.tmux = { ...NEWER, onDisk: '2.1.300' }
+    await idle($, w, IDLE + 3 * RESTART_CHECK_MS)
+    expect(held()).toEqual([])
+    w.tmux = { ...NEWER, clients: LIVE }
+    await w.clock.advance(4 * RESTART_CHECK_MS)
+    expect(held()).toEqual([`Not restarting session ${ID.slice(0, 8)} to update to 2.1.306 yet: a tmux client attached to it was used in the last 10 minutes`])
+    w.tmux = { ...NEWER }
+    w.draft = 'half a thought'
+    await w.clock.advance(2 * RESTART_CHECK_MS)
+    expect(held().length).toBe(2)
+    expect(held()[1]).toMatch(/the prompt box is not empty$/)
+    expect(respawns(w)).toEqual([])
+  })
+
+  test('a session that took a Remote Control prompt comes back with Remote Control', async ($, on) => {
+    const w = world(on, [], { AUTO_RESTART_TO_UPDATE: 'on' })
+    w.tmux = { ...NEWER }
+    await $.session.start({ cwd: '/work', surface: 'terminal', isInteractive: true })
+    await $.prompt.submit({ text: 'hi from the phone', wait: false, origin: { kind: 'bridge' } })
+    await w.clock.advance(IDLE)
+    const i = w.scripts.findIndex(s => s.includes('respawn-pane'))
+    expect(w.scripts[i]).toContain('--remote-control')
+    expect(w.scriptArgs[i]).toEqual(['%3', '/work', '/usr/bin/claude', ID, 'rc'])
+  })
+
+  test('/remote-control at the terminal counts too, a plain session does not', async ($, on) => {
+    const w = world(on, [], { AUTO_RESTART_TO_UPDATE: 'on' })
+    w.tmux = { ...NEWER }
+    await $.session.start({ cwd: '/work', surface: 'terminal', isInteractive: true })
+    const last = () => w.scriptArgs[w.scripts.map(s => s.includes('respawn-pane')).lastIndexOf(true)]
+    await w.clock.advance(IDLE)
+    expect(last()?.[4]).toBe('plain')
+    w.sessionId = '1a2b3c4d-5678-4abc-9def-abcdef012345'
+    await $.command.run({ command: 'remote-control', args: '', origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 80 } })
+    await w.clock.advance(IDLE)
+    expect(last()?.[4]).toBe('rc')
+  })
+
+  test('a session restarted with Remote Control keeps it the next time', async ($, on) => {
+    const w = world(on, [], { AUTO_RESTART_TO_UPDATE: 'on' }, { [`lastRestart:${ID}`]: { target: '2.1.300', at: T0, isRemote: true } })
+    w.tmux = { ...NEWER }
+    await idle($, w)
+    expect(w.scriptArgs[w.scripts.findIndex(s => s.includes('respawn-pane'))]?.[4]).toBe('rc')
   })
 
   test('dry only says what it would do, once', async ($, on) => {

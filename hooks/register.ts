@@ -248,7 +248,10 @@ async function turnStarted($: EngineInterface, state: State) {
 // background, a session in tmux that nobody is attached to, with no turn
 // running, nothing in flight or waiting to wake it, an empty prompt box and
 // nothing done for RESTART_IDLE_MS, has tmux replace its process with
-// `claude -r <session id>`, then a shell.
+// `claude -r <session id>`, then a shell. A session that took a Remote Control
+// prompt, or ran /remote-control, comes back with --remote-control.
+// Once an update is there, each thing that holds the restart back is written
+// to fluid's log, once per build, so a session left behind says why.
 // AUTO_RESTART_TO_UPDATE in the settings' env: `on` restarts, `dry` only logs
 // what it would do, anything else (the default) does nothing.
 
@@ -267,6 +270,11 @@ type Restart = {
   isChecking?: boolean
   // Dry mode logs each target version once
   loggedFor?: string
+  // What held the restart back, already logged for this target version
+  heldFor?: string
+  held?: string[]
+  // Remote Control was used here: the restart brings it back
+  isRemote?: boolean
   ticker?: { cancel: () => void }
 }
 
@@ -311,28 +319,36 @@ export function hasLiveClient(activity: string, now: number): boolean {
   })
 }
 
-// Nobody is there: no client attached to the pane's session that has typed
-// lately, nothing in the prompt box, no turn running. Asked again right before
-// the respawn, since a person may come back while anything slow runs
-async function isUnattended($: EngineInterface, restart: Restart, pane: string, now: number): Promise<boolean> {
-  if (restart.isTurnRunning) return false
+// What says someone is there, if anything: a turn running, a client attached to
+// the pane's session that has typed lately, something in the prompt box. Asked
+// again right before the respawn, since a person may come back while anything
+// slow runs
+async function whyAttended($: EngineInterface, restart: Restart, pane: string, now: number): Promise<string | undefined> {
+  if (restart.isTurnRunning) return 'a turn is running'
   const activity = await sh($, 'tmux list-clients -t "$1" -F "#{client_activity}"', [pane])
-  if (activity === undefined || hasLiveClient(activity, now)) return false
-  if ((await $.prompt.read()).text.trim() !== '') return false
-  return !restart.isTurnRunning
+  if (activity === undefined) return 'tmux could not list the clients of its session'
+  if (hasLiveClient(activity, now)) return 'a tmux client attached to it was used in the last 10 minutes'
+  if ((await $.prompt.read()).text.trim() !== '') return 'the prompt box is not empty'
+  if (restart.isTurnRunning) return 'a turn is running'
+  return undefined
+}
+
+// Says once per target version why a session is not restarting yet
+async function hold($: EngineInterface, restart: Restart, target: string, id: string, why: string) {
+  if (restart.heldFor !== target) {
+    restart.heldFor = target
+    restart.held = []
+  }
+  if (restart.held!.includes(why)) return
+  restart.held!.push(why)
+  await fluid($, ['log', 'claude', `Not restarting session ${id.slice(0, 8)} to update to ${target} yet: ${why}`])
 }
 
 async function restartCheck($: EngineInterface, restart: Restart) {
   const mode = await $.env.get('AUTO_RESTART_TO_UPDATE')
   if (mode !== 'dry' && mode !== 'on') return
-  if (restart.isTurnRunning) return
-  // A backgrounded command or subagent outlives the turn, and a session cron
-  // (CronCreate, ScheduleWakeup, /loop) means the session is waiting to be woken:
-  // the pane looks idle either way, but the respawn would take the work with it
-  if (restart.hasPendingWork) return
-  const now = await $.clock.now()
-  if (now - restart.lastActivity < RESTART_IDLE_MS) return
   if (!(await isInstalled($))) return
+  const now = await $.clock.now()
 
   // The process environment, which $.env (the settings files) does not see
   const pane = await sh($, 'printf %s "$TMUX_PANE"')
@@ -351,16 +367,25 @@ async function restartCheck($: EngineInterface, restart: Restart) {
   // target, not to let one restart hold every other idle session back
   const key = `lastRestart:${id}`
   const last = (await $.store.get(key)) as { target?: string; at?: number } | undefined
-  if (last?.target === onDisk && last.at !== undefined && now - last.at < RESTART_RETRY_MS) return
+  if (last?.target === onDisk && last.at !== undefined && now - last.at < RESTART_RETRY_MS) {
+    return hold($, restart, onDisk, id, `it already tried this build at ${stamp(last.at)}`)
+  }
 
-  if (!(await isUnattended($, restart, pane, now))) return
+  // A backgrounded command or subagent outlives the turn, and a session cron
+  // (CronCreate, ScheduleWakeup, /loop) means the session is waiting to be woken:
+  // the pane looks idle either way, but the respawn would take the work with it
+  const why = restart.isTurnRunning ? 'a turn is running'
+    : restart.hasPendingWork ? 'background work is in flight, or it is waiting for a wakeup'
+    : now - restart.lastActivity < RESTART_IDLE_MS ? 'it was used in the last 10 minutes'
+    : await whyAttended($, restart, pane, now)
+  if (why !== undefined) return hold($, restart, onDisk, id, why)
 
   const cwd = await $.session.cwd()
 
   if (mode === 'dry') {
     if (restart.loggedFor !== onDisk) {
       restart.loggedFor = onDisk
-      $.ui.log(`restart to update (dry): would restart ${running} -> ${onDisk} at ${stamp(now)} in ${pane} as ${claude} -r ${id}`)
+      $.ui.log(`restart to update (dry): would restart ${running} -> ${onDisk} at ${stamp(now)} in ${pane} as ${claude} -r ${id}${restart.isRemote ? ' --remote-control' : ''}`)
     }
     return
   }
@@ -368,8 +393,8 @@ async function restartCheck($: EngineInterface, restart: Restart) {
   // Everything that waits comes before the last look, so a turn cannot start
   // between it and the respawn. The record is taken back if it is not made
   await fluid($, ['log', 'claude', `Restarting an idle session in tmux to update, ${running} -> ${onDisk}`])
-  await $.store.set(key, { target: onDisk, at: now, from: running, id })
-  if (!(await isUnattended($, restart, pane, now)) || restart.isTurnRunning) {
+  await $.store.set(key, { target: onDisk, at: now, from: running, id, isRemote: restart.isRemote === true })
+  if ((await whyAttended($, restart, pane, now)) !== undefined || restart.isTurnRunning) {
     await $.store.delete(key)
     void fluid($, ['log', 'claude', 'Someone came back to the session; not restarting it'])
     return
@@ -379,8 +404,8 @@ async function restartCheck($: EngineInterface, restart: Restart) {
   $.ui.log(`restart to update: ${running} -> ${onDisk} at ${stamp(now)}`)
   // tmux 3.0+ runs the trailing arguments as an argv, so nothing is quoted into
   // a command line. The shell after claude keeps the pane usable if it fails
-  await sh($, 'tmux respawn-pane -k -t "$1" -c "$2" sh -c \'"$0" -r "$1"; exec "${SHELL:-sh}"\' "$3" "$4"',
-    [pane, cwd, claude, id])
+  await sh($, 'tmux respawn-pane -k -t "$1" -c "$2" sh -c \'if [ "$2" = rc ]; then "$0" -r "$1" --remote-control; else "$0" -r "$1"; fi; exec "${SHELL:-sh}"\' "$3" "$4" "$5"',
+    [pane, cwd, claude, id, restart.isRemote ? 'rc' : 'plain'])
 }
 
 // One check at a time; a failure is logged to the debug log and dropped, so
@@ -416,6 +441,9 @@ export const register: Register = on => {
     const result = await next(e)
     try {
       await restartActivity($, restart, false)
+      // A session this restarted with --remote-control keeps it the next time
+      const last = (await $.store.get(`lastRestart:${await $.session.id()}`)) as { isRemote?: boolean } | undefined
+      if (last?.isRemote) restart.isRemote = true
       restart.ticker?.cancel()
       restart.ticker = $.clock.every(RESTART_CHECK_MS, () => void restartTick($, restart))
     } catch {
@@ -453,6 +481,19 @@ export const register: Register = on => {
       if (e.reason === 'error' && isLimited((await $.session.usage()).rateLimits)) await stopped($, state)
     }
     return result
+  })
+
+  // Look-only: a prompt from a phone or the web, or /remote-control at the
+  // terminal, means a restart should bring Remote Control back.
+  // ponytail: once seen it stays for the session; read Remote Control's own
+  // state instead if the engine ever exposes one
+  on('prompt.submit', (_$, e, next) => {
+    if (e.origin?.kind === 'bridge') restart.isRemote = true
+    return next(e)
+  })
+  on('command.run', (_$, e, next) => {
+    if (e.command === 'remote-control') restart.isRemote = true
+    return next(e)
   })
 
   // 見るだけのフック: Stop が、まだ走っている背景の仕事と、この先この

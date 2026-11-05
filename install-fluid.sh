@@ -34,8 +34,8 @@ agent_settings() {
     esac
 }
 
-# 状態栏を包むことのあるエージェントすべて。取り除くときはこちらを使う:
-# エージェント本体が PATH から見えなくなっても、設定に残した痕跡は消せるように。
+# Every agent whose status line Fluid may wrap. Removal goes through this:
+# traces left in the settings can be removed even once the agent is off PATH.
 # Claude Code is still listed so that what versions before 0.3.0 wrote into
 # its settings comes out again; it is no longer wrapped (see wrapped_agents).
 known_agents() {
@@ -87,8 +87,8 @@ require() {
     done
 }
 
-# シンボリックリンクをたどった先の実体のパス。dotfiles で管理された設定を
-# 書き換えるとき、リンクを普通のファイルで置き換えてしまわないように
+# The real path behind any symlinks, so rewriting settings kept in dotfiles
+# does not replace the link with a plain file
 resolve_link() {
     local path="$1" link n=0
 
@@ -103,9 +103,9 @@ resolve_link() {
     printf '%s\n' "$path"
 }
 
-# 設定ファイル $1 を jq（残りの引数、最後がフィルタ）で書き換える。一時ファイルは
-# 実体と同じディレクトリに元の権限のまま作り、検証してから mv で置き換えるので、
-# 途中で失敗しても元のファイルは壊れない。中身が変わらなければ何もしない
+# Rewrite settings file $1 with jq (the remaining arguments, the filter last).
+# The temporary file is made next to the real one with its permissions, checked,
+# then moved over it, so a failure halfway leaves the original intact. Nothing happens when the content is unchanged
 edit_json() {
     local file target tmp
     file="$1"
@@ -128,8 +128,8 @@ edit_json() {
     mv "$tmp" "$target"
 }
 
-# 設定のバックアップは新しいものから $2 個だけ残す。名前の末尾の時刻で並べる
-# （cp -p で取るので、更新時刻は元のファイルのものになっている）
+# Keep only the newest $2 backups of a settings file, ordered by the time at the end of the name
+# (they are taken with cp -p, so the modification time is the original file's)
 prune_backups() {
     local file="$1" keep="$2" f
 
@@ -280,7 +280,7 @@ restore_probed_bin() {
 
 write_probe() {
     local tmp
-    # $1: 調べているエージェント
+    # $1: the agent being checked
 
     tmp="$(mktemp "$BASE/.probe.XXXXXX")"
 
@@ -288,8 +288,8 @@ write_probe() {
         echo '#!/usr/bin/env bash'
         echo '# Temporary: Fluid is checking whether another status line program'
         echo '# calls it. See chain_calls_us() in the installer.'
-        # 調べているエージェントの状態栏からの呼び出しだけを数える。同じ時に
-        # 別のエージェントの状態栏が更新されても、包まれている証拠にはならない
+        # Count only calls from the status line of the agent being checked. Another
+        # agent's status line refreshing at the same time is no proof of wrapping
         printf 'if [[ "${1:-}" == statusline && "${2:-claude}" == %q ]]; then\n' "$1"
         printf '    : > %q\n' "$PROBE_DIR/called"
         echo 'fi'
@@ -303,8 +303,8 @@ write_probe() {
     mv "$tmp" "$BIN"
 }
 
-# 状態栏コマンドを一度だけ実行する。専用のプロセスグループで動かし、終われば
-# （10 秒で打ち切っても）グループごと止めるので、孫プロセスも後に残らない
+# Run a status line command once, in its own process group, and stop the whole
+# group when it ends (or is cut off at 10 seconds), so no grandchild is left behind
 run_probe() {
     local cmd="$1" input="$2"
 
@@ -356,8 +356,8 @@ chain_calls_us() {
     return "$rc"
 }
 
-# ロック $1 を誰かが持っているか。flock があればそれで、なければ fluid.sh の
-# mkdir のロック（$1.d に持ち主の pid）で確かめる
+# Whether anyone holds lock $1: through flock when there is one, otherwise through
+# fluid.sh's mkdir lock (the owner's pid in $1.d)
 lock_busy() {
     local holder
 
@@ -370,7 +370,7 @@ lock_busy() {
     fi
 }
 
-# 走っている warmup と予約の差し替えが終わるのを、最長 $1 秒待つ
+# Wait up to $1 seconds for a running warmup or reschedule to finish
 wait_for_runs() {
     local deadline dir lock said=""
     deadline=$(( $(date +%s) + $1 ))
@@ -390,7 +390,7 @@ wait_for_runs() {
     done
 }
 
-# Fluid の予約をすべて取り消す: Linux の at ジョブと、macOS の launchd エージェント
+# Cancel every Fluid reservation: at jobs on Linux, launchd agents on macOS
 remove_jobs() {
     if command -v atq >/dev/null 2>&1; then
         local job_id rest me
@@ -398,8 +398,8 @@ remove_jobs() {
 
         while read -r job_id rest; do
             [[ -n "$job_id" ]] || continue
-            # root の atq には全ユーザーのジョブが並ぶ。最後の列が持ち主で、
-            # 他のユーザーの Fluid のジョブには触れない
+            # root's atq lists every user's jobs. The last column is the owner, and
+            # other users' Fluid jobs are left alone
             [[ "${rest##*[[:space:]]}" == "$me" ]] || continue
 
             # Read the job from a file descriptor, not a pipe: grep -q quitting
@@ -438,7 +438,7 @@ remove_installation() {
         file="$(agent_settings "$id")" || continue
         [[ -f "$file" ]] || continue
 
-        # 壊れた JSON は編集しない。こちらの痕跡が見えるときだけ知らせる
+        # Broken JSON is not edited; say so only when our traces show
         if ! jq empty "$file" 2>/dev/null; then
             grep -qF "$MARKER" "$file" &&
                 echo "$file is not valid JSON, so Fluid's entries in it were left in place." >&2
@@ -454,9 +454,9 @@ remove_installation() {
 
     remove_jobs
 
-    # 予約はもう取り消したので、新しい実行は始まらない。すでに走っている
-    # warmup や予約の差し替えが終わってから消す。先に消すと、終わった実行が
-    # ~/.fluid を作り直し、消えたスクリプトを指す予約を残してしまう
+    # The reservations are already cancelled, so no new run starts. Delete only
+    # once a running warmup or reschedule is done: deleting first lets the finished run
+    # recreate ~/.fluid and leave a reservation pointing at a script that is gone
     wait_for_runs 200
 
     if (( ${#keep[@]} == 0 )); then
@@ -467,7 +467,7 @@ remove_installation() {
         # that and takes its job back out (arm_job_locked).
         local gone="$BASE.removing.$$"
         [[ -e "$BASE" ]] && mv "$BASE" "$gone"
-        # 待っている間に終わった実行が、次の予約を入れているかもしれない
+        # A run that finished during the wait may have booked the next one
         remove_jobs
         rm -rf "$gone" || rm -rf "$gone"
     else
@@ -620,14 +620,14 @@ fi
 
 survey_agents install
 
-# 新しいスクリプトはまず一時ディレクトリに書いて検証する。ここで失敗しても、
-# 古いインストールにはまだ何も手を付けていない
+# The new script is written to a temporary directory and checked first. Failing here
+# leaves the old installation untouched
 STAGE="$(mktemp -d)"
 REMOVED=""
 INSTALL_DONE=""
 
-# 古いインストールを取り除いた後で止まると、予約が消えたままになる。そのとき
-# は置けたスクリプトで次の実行を予約し直し、どうなったかを伝える
+# Stopping after the old installation was removed would leave nothing scheduled. In that
+# case reschedule the next run with whatever script was placed, and say how it went
 on_install_exit() {
     rm -rf "$STAGE"
     [[ -n "$REMOVED" && -z "$INSTALL_DONE" ]] || return 0
@@ -671,9 +671,9 @@ SELF="$BASE/fluid.sh"
 DEFAULT_WINDOW=18000
 STALL_GRACE=300
 
-# アンインストールは state/ ごと消す。その後も走り続けていた実行が、
-# ~/.fluid を作り直したり、消えたスクリプトを予約したりしないように、
-# 書き込む前にこれで確かめる。Directories are made one level at a time
+# Uninstalling removes state/ altogether. Check with this before writing, so a run
+# still going afterwards neither recreates ~/.fluid nor schedules a script that is
+# gone. Directories are made one level at a time
 # (mkdir, never mkdir -p) for the same reason: a run that started before an
 # uninstall must not build ~/.fluid back up again under its feet.
 installed() {
@@ -732,6 +732,11 @@ default_capabilities() {
 # Most agents word an expired login much the same way
 default_auth_failed() {
     grep -Eqi 'login expired|please run /login|log ?in again|authentication_failed|not logged in|unauthorized|oauth[^[:alnum:]]+.*expired'
+}
+
+# Few agents say ahead of time that a login is about to end
+default_auth_expiring() {
+    return 1
 }
 
 default_warmup() {
@@ -919,8 +924,8 @@ reverse_lines() {
 
 HELD_LOCKS=()
 
-# このプロセス自身の pid。サブシェルでは $$ が親の pid のままなので、
-# bash 4 以降は BASHPID を使い、bash 3.2 では sh の親 pid から得る
+# This process's own pid. In a subshell $$ is still the parent's, so bash 4 and
+# later use BASHPID, and bash 3.2 takes it from sh's parent pid
 self_pid() {
     if [[ -n "${BASHPID:-}" ]]; then
         printf '%s\n' "$BASHPID"
@@ -948,7 +953,7 @@ take_lock() {
     # that died is spotted by its pid; contention here is a handful of runs.
     local dir="$path.d" holder held
     # Already ours: flock lets a process take its own lock again, so must this.
-    # pid ではなく保持リストで判定する（サブシェルは親と同じ $$ を持つため）
+    # Decide by the held list, not the pid (a subshell shares its parent's $$)
     for held in ${HELD_LOCKS[@]+"${HELD_LOCKS[@]}"}; do
         [[ "$held" == "$dir" ]] && return 0
     done
@@ -963,13 +968,13 @@ take_lock() {
         sleep 0.2
     done
 
-    # 親が先に終了しても、バックグラウンドの保持者が生きている間はロックが残るように
+    # Keep the lock while a background holder lives, even if the parent exits first
     self_pid > "$dir/pid"
     HELD_LOCKS+=("$dir")
     trap 'rm -rf ${HELD_LOCKS[@]+"${HELD_LOCKS[@]}"}' EXIT
 }
 
-# take_lock で取ったロックを、プロセスの終了を待たずに手放す
+# Release a lock taken with take_lock without waiting for the process to exit
 release_lock() {
     local fd="$1" dir="$2.d" held kept=()
 
@@ -985,9 +990,9 @@ release_lock() {
     rm -rf "$dir"
 }
 
-# バックグラウンドの子を起こす前に呼ぶ: 親が持つロックを子に引き継がせない。
-# flock の fd が子に残ると、子が終わるまで他のプロセスがロックを待たされ、
-# mkdir ロックの一覧が残ると、子の EXIT trap が他人のロックを消してしまう
+# Call before starting a background child, so it does not inherit the parent's locks.
+# A flock fd left to a child makes others wait for the lock until the child ends;
+# a mkdir lock list left to it lets the child's EXIT trap remove someone else's lock
 drop_inherited_locks() {
     exec 5>&- 6>&- 7>&- 8>&- 9>&-
     HELD_LOCKS=()
@@ -1020,12 +1025,12 @@ submit_job() {
 
     if [[ "$SCHEDULER" == at ]]; then
         local output v env=()
-        # at はジョブに提出時の作業ディレクトリと環境を記録し、実行時にまず
-        # そのディレクトリへ cd して、失敗すれば何も実行せずに終わる。提出元は
-        # たいてい状態栏を描くセッションで、その作業ディレクトリ（後で消える
-        # worktree など）に依存させないよう / から提出する。環境は at の spool
-        # に平文で残るので、エージェントを動かすのに要るものだけを渡す。
-        # セッションのトークンの類は持ち込まない
+        # at records the submitting working directory and environment with the job, cds
+        # there first when it runs, and does nothing if that fails. The submitter is
+        # usually a session drawing the status line, so submit from / rather than
+        # depending on its working directory (a worktree that goes away, say). The environment
+        # stays in at's spool in plain text, so pass only what running the agent needs,
+        # and none of the session's tokens
         for v in HOME USER LOGNAME PATH SHELL LANG LC_CTYPE TZ TMPDIR \
                  XDG_CONFIG_HOME XDG_DATA_HOME XDG_STATE_HOME XDG_CACHE_HOME \
                  XDG_RUNTIME_DIR DBUS_SESSION_BUS_ADDRESS CLAUDE_CONFIG_DIR CODEX_HOME \
@@ -1049,9 +1054,9 @@ submit_job() {
     # launchd fires on whole minutes; round up so a run is never early
     (( target % 60 == 0 )) || target=$(( (target / 60 + 1) * 60 ))
 
-    # launchd のエージェントは PATH が /usr/bin:/bin:/usr/sbin:/sbin だけで始まり、
-    # Homebrew の jq や tmux、~/.local/bin の claude などが見つからない。提出元の
-    # PATH を plist に書いておけば、ジョブから提出されるジョブにも引き継がれる
+    # A launchd agent starts with PATH set to only /usr/bin:/bin:/usr/sbin:/sbin and
+    # finds neither Homebrew's jq or tmux nor claude in ~/.local/bin. Writing the
+    # submitter's PATH into the plist carries it on to jobs submitted from jobs too
     local job="$target-$$-$RANDOM" label plist month day hour minute arg args=""
     label="$LAUNCH_PREFIX.$job"
     plist="$LAUNCH_DIR/$label.plist"
@@ -1059,9 +1064,9 @@ submit_job() {
 
     # The job deletes its own plist first, then runs, then unloads itself;
     # StartCalendarInterval has no year, so it must never be left behind.
-    # 電源が切れていて時刻を逃した予約は、launchd が拾い直さないまま翌年の
-    # 同じ日まで残る。RunAtLoad でログイン時にも起こし、時刻を過ぎていれば
-    # 取り戻す。読み込まれた直後など、まだ早ければ何もせずに待つ
+    # A reservation missed while the machine was off is not picked up again by launchd
+    # and stays until the same date next year. RunAtLoad also wakes it at login to catch
+    # up once the time has passed; when still early (just after loading, say) it waits
     for arg in /bin/bash -c '[ "$(date +%s)" -ge "$6" ] || exit 0; rm -f -- "$1"; "$2" "$3" "$4"; launchctl remove "$5"' \
                fluid-job "$plist" "$SELF" "$sub" "$id" "$label" "$((target - 30))"; do
         args="$args        <string>$(xml_escape "$arg")</string>"$'\n'
@@ -1138,8 +1143,8 @@ arm_job() {
     dir="$(pstate "$1")"
     mkdir "$dir" 2>/dev/null
 
-    # ロックは予約の差し替えの間だけ持つ。プロセスの終了まで持つと、続く
-    # warmup や後から起こすバックグラウンドの子の間も状態栏を待たせてしまう
+    # Hold the lock only while rescheduling. Holding it until the process exits would
+    # keep the status line waiting through the warmup and the background children started later
     take_lock 9 "$dir/schedule.lock"
     arm_job_locked "$@" || rc=$?
     release_lock 9 "$dir/schedule.lock"
@@ -1356,7 +1361,7 @@ observe() {
     parsed="$(printf '%s' "$input" | provider_call "$id" parse_limits 2>/dev/null)" || return 0
     [[ -n "$parsed" ]] || return 0
 
-    # 読み取りが最後にどこから、いつ届いたか。status で見えるように
+    # Where and when the last reading came from, for status to show
     if [[ "$parsed" != "{}" ]]; then
         pset "$id" last_reading "$(date +%s)"
         [[ -n "$origin" ]] && pset "$id" reading_source "$origin"
@@ -1489,9 +1494,9 @@ do_warmup() {
     planned="$(pget "$id" at_job)"
     model="$(warmup_model "$id")"
 
-    # エージェントが残す子プロセスに warmup のロックを持ち去らせない。
-    # 手で実行されても予約で実行されても同じように、/ で動かす（呼び出し元の
-    # プロジェクトの AGENTS.md などを読ませない）
+    # Keep the agent's leftover children from walking off with the warmup lock.
+    # Run from / whether started by hand or by a reservation (so the caller's
+    # project AGENTS.md and the like are not read)
     # exec, not `8>&-` on the call: bash 3.2 lets a function's background
     # children keep an fd closed that way
     output="$(exec 8>&-; cd / && provider_call "$id" warmup "$model")"
@@ -1518,6 +1523,16 @@ do_warmup() {
         notify_recovered "$dir" "Fluid is back to normal for $(provider_call "$id" label); windows are opening again." auth failing missing
 
         log "[$id] Warmup succeeded output=$(printf '%s' "$output" | tr '\n' ' ' | cut -c1-200)"
+
+        # A login that still works but has said when it ends is worth a word
+        # while there is time to sign in again; a fresh login clears the flag
+        # so the next deadline is announced too
+        if printf '%s\n' "$output" | provider_call "$id" auth_expiring; then
+            notify_once "$dir" expiring "auth-expiring" \
+                "$(provider_call "$id" label)'s sign-in is about to end, after which Fluid can no longer open windows for it. Sign in again now."
+        else
+            rm -f "$dir/notified-expiring"
+        fi
 
         # A reading that came in while this ran already planned from the
         # official reset; an estimate must not replace it. Unless that reset
@@ -1615,8 +1630,8 @@ scheduled() {
     pset "$id" last_run "$(date +%s)"
     notify_recovered "$(pstate "$id")" "Fluid's scheduled runs for $(provider_call "$id" label) are happening again." stalled
 
-    # エージェントが見つからなければ warmup は失敗し続けるだけなので、
-    # 一度だけ知らせて、一時間ごとに戻ってくるか確かめる
+    # Without the agent a warmup can only keep failing, so say so once
+    # and look every hour for it to come back
     if ! { provider_defines "$id" available && "${id}_available"; } 2>/dev/null; then
         log "[$id] $(provider_call "$id" label) is not installed or not on PATH; looking again in an hour"
         notify_once "$(pstate "$id")" missing "agent-missing" \
@@ -1880,7 +1895,7 @@ case "${1:-}" in
     notify-test)
         notify_test
         ;;
-    # フック・モジュールから: ログに一行、通知を一つ
+    # From the hooks module: one line in the log, one notification
     log)
         log "[${2:-}] ${3:-}"
         ;;
@@ -1940,7 +1955,12 @@ claude_parse_limits() {
 # cross-process refresh lock to another Claude Code. Only the first means
 # anyone has to sign in again; the others are worth a retry, not a message.
 claude_auth_failed() {
-    grep -Eqi 'refresh token.*no longer valid|run /login|token_revoked|not logged in|invalid_credential'
+    grep -Eqi 'refresh token.*no longer valid|run /login|token_revoked|not logged in|invalid_credential|reached its time limit|cannot be renewed'
+}
+
+# A login with a hard end date warns on every request until then
+claude_auth_expiring() {
+    grep -Eqi 'sign-in can end'
 }
 
 claude_cheap_model() {
@@ -2077,8 +2097,8 @@ KEEP=("$(basename "$STATE")" "$(basename "$NOTIFY")" "$(basename "$ANCHOR")" "fl
 REMOVED=1
 remove_installation "${KEEP[@]}"
 
-# 0.3.0 で tmux 経由の再開はなくなった。それまでの版が state/ に残した記録
-# （止まったセッション、resume の予約、そのロック）は、もう誰も読まない
+# 0.3.0 dropped resuming through tmux. What earlier versions left in state/
+# (stopped sessions, resume reservations, their lock) is read by no one any more
 rm -rf "$STATE"/*/pending "$STATE"/*/resume_job "$STATE"/*/resume_target \
     "$STATE"/*/resume.lock "$STATE"/*/resume.lock.d \
     "$STATE"/*/resume-job.lock "$STATE"/*/resume-job.lock.d

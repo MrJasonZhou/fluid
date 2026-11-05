@@ -115,10 +115,11 @@ It is off by default. Turn it on in the `env` of `~/.claude/settings.json`:
 
 ## Alerts
 
-Fluid stays quiet unless something needs you, and tells you about six things:
+Fluid stays quiet unless something needs you, and tells you about seven things:
 
 | | |
 |---|---|
+| **Sign-in ending** | An agent says its login will end soon; sign in again before it does |
 | **Signed out** | An agent's login has expired, so nothing can be opened for it until you sign in again |
 | **Repeatedly failing** | Several warm-ups in a row have failed for one agent |
 | **Scheduler stopped** | A planned run is long overdue, so no window is being kept open; usually `atd` is not running |

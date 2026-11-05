@@ -115,10 +115,11 @@ Mit `dry` statt `on` schreibt es nur in die Sitzung, was es tun würde. Das setz
 
 ## Benachrichtigungen
 
-Fluid bleibt still, solange nichts Ihre Aufmerksamkeit braucht, und meldet sechs Dinge:
+Fluid bleibt still, solange nichts Ihre Aufmerksamkeit braucht, und meldet sieben Dinge:
 
 | | |
 |---|---|
+| **Anmeldung endet bald** | Ein Agent meldet, dass seine Anmeldung bald endet; melden Sie sich vorher neu an |
 | **Abgemeldet** | Die Anmeldung eines Agenten ist abgelaufen; für ihn lässt sich nichts öffnen, bis Sie sich neu anmelden |
 | **Wiederholt fehlgeschlagen** | Mehrere Warm-ups hintereinander sind für einen Agenten fehlgeschlagen |
 | **Planer steht** | Ein geplanter Lauf ist längst überfällig, es wird also kein Fenster offen gehalten; meist läuft `atd` nicht |

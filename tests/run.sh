@@ -97,6 +97,9 @@ case "$(cat "$CP_TEST/claude-mode" 2>/dev/null)" in
     # Claude Code's own wording for both
     transient) echo "Failed to authenticate: OAuth session expired and could not be refreshed" >&2; exit 1 ;;
     lockheld)  echo "OAuth access token could not be refreshed: another Claude Code process is holding the refresh lock" >&2; exit 1 ;;
+    # A login with a hard end date: warned about until then, dead after
+    expiring) echo "Warning: this sign-in can end at any time from now until 2026-11-04. Renewing it does not move that date."; echo OK ;;
+    expired) echo "Failed to authenticate: this login reached its time limit and cannot be renewed. Run \`claude auth login\` to sign in again" >&2; exit 1 ;;
     fail) echo "API Error: Overloaded" >&2; exit 1 ;;
     # 応答に時間のかかる warmup
     slow) sleep 2; echo OK ;;
@@ -784,6 +787,20 @@ check "and the first failure time is kept"              '[[ $(cat "$BASE/state/c
 echo ok > "$CP_TEST/claude-mode"
 cp_run warmup claude >/dev/null
 check "signing in again clears it and says so"          '[[ ! -e "$BASE/state/claude/auth_required" && $(count recovered notify-delivered) == 1 ]]'
+
+echo expiring > "$CP_TEST/claude-mode"
+cp_run warmup claude >/dev/null
+check "a login about to end: announced"                 '[[ $(count auth-expiring notify-delivered) == 1 ]]'
+cp_run warmup claude >/dev/null
+check "only once"                                       '[[ $(count auth-expiring notify-attempts) == 1 ]]'
+
+echo expired > "$CP_TEST/claude-mode"
+cp_run warmup claude >/dev/null
+check "a login past its time limit is a dead session"   '[[ -e "$BASE/state/claude/auth_required" && $(cat "$BASE/state/claude/at_reason") == auth-recheck ]]'
+
+echo ok > "$CP_TEST/claude-mode"
+cp_run warmup claude >/dev/null
+check "a fresh login clears the warning"                '[[ ! -e "$BASE/state/claude/notified-expiring" ]]'
 
 install_cp uninstall >/dev/null
 

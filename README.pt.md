@@ -115,10 +115,11 @@ Com `dry` em vez de `on`, ele só escreve na sessão o que faria. É preciso o p
 
 ## Avisos
 
-O Fluid fica quieto enquanto nada precisa de você, e informa seis coisas:
+O Fluid fica quieto enquanto nada precisa de você, e informa sete coisas:
 
 | | |
 |---|---|
+| **Login perto do fim** | Um agente avisa que o login dele vai acabar em breve; entre de novo antes disso |
 | **Desconectado** | O login de um agente expirou; para ele nada pode ser aberto até você entrar de novo |
 | **Falhas repetidas** | Vários warm-ups seguidos falharam para um agente |
 | **Agendador parado** | Uma execução agendada está muito atrasada, então nenhuma janela está sendo mantida aberta; geralmente o `atd` não está rodando |

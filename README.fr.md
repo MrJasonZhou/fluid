@@ -115,10 +115,11 @@ Avec `dry` au lieu de `on`, il se contente d'écrire dans la session ce qu'il fe
 
 ## Alertes
 
-Fluid reste silencieux tant que rien ne requiert votre attention, et ne signale que six choses :
+Fluid reste silencieux tant que rien ne requiert votre attention, et ne signale que sept choses :
 
 | | |
 |---|---|
+| **Connexion bientôt expirée** | Un agent annonce que son authentification prendra fin bientôt : reconnectez-vous avant |
 | **Déconnecté** | L'authentification d'un agent a expiré : rien ne peut être ouvert pour lui tant que vous ne vous reconnectez pas |
 | **Échecs répétés** | Plusieurs warm-ups d'affilée ont échoué pour un agent |
 | **Planificateur arrêté** | Une exécution prévue a largement dépassé son heure : aucune fenêtre n'est maintenue ouverte ; en général `atd` ne tourne pas |

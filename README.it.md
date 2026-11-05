@@ -115,10 +115,11 @@ Con `dry` al posto di `on` scrive soltanto nella sessione cosa farebbe. Servono 
 
 ## Avvisi
 
-Fluid resta in silenzio finché non serve il tuo intervento, e segnala sei cose:
+Fluid resta in silenzio finché non serve il tuo intervento, e segnala sette cose:
 
 | | |
 |---|---|
+| **Accesso in scadenza** | Un agente avvisa che il suo accesso finirà presto: rientra prima che scada |
 | **Disconnesso** | L'accesso di un agente è scaduto: per lui non si può aprire nulla finché non rientri |
 | **Fallimenti ripetuti** | Diversi warm-up di fila sono falliti per un agente |
 | **Pianificatore fermo** | Un'esecuzione pianificata è molto in ritardo, quindi nessuna finestra viene tenuta aperta; di solito `atd` non è in esecuzione |

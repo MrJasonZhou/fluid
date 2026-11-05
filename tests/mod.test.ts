@@ -1,9 +1,9 @@
-// Fluid のフック・モジュール（hooks/register.ts）のテスト。
+// Tests for Fluid's hooks module (hooks/register.ts).
 //
 //   claude plugin test .
 //
-// エンジンの下に置いたフックが、HOME、時計、fluid.sh の呼び出し、使用量、
-// 入力欄、送られたプロンプトを受け持つ。本物の fluid.sh は動かさない。
+// Hooks placed under the engine stand in for HOME, the clock, calls to fluid.sh, usage,
+// the prompt box and sent prompts. The real fluid.sh never runs.
 
 import { describe, expect, mock, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
@@ -15,23 +15,23 @@ const BIN = '/home/u/.fluid/fluid.sh'
 const ID = '0f8b5c2e-1234-4abc-9def-0123456789ab'
 
 type World = {
-  // fluid.sh に渡した引数と標準入力
+  // Arguments and stdin passed to fluid.sh
   runs: { argv: string[]; stdin?: string }[]
-  // 送られたプロンプト
+  // Prompts that were sent
   submitted: string[]
   env: Record<string, string | undefined>
   limits: SessionRateLimit[]
   draft: string
   clock: ReturnType<typeof mock.clock>
-  // 入力欄が読まれるたびに、答える前に呼ばれる
+  // Called each time the prompt box is read, before answering
   onRead?: () => Promise<void>
-  // プロンプトが送られるたびに、答える前に呼ばれる
+  // Called each time a prompt is sent, before answering
   onSubmit?: () => Promise<void>
-  // この回数だけ、通知に失敗する
+  // Fail this many notifications
   failNotify: number
-  // ~/.fluid/fluid.sh があるか（/fluid:install の後か）
+  // Whether ~/.fluid/fluid.sh exists (after /fluid:install)
   isInstalled: boolean
-  // session.id が答える値。セッション別の記録を試すために変えられる
+  // What session.id answers. Changeable to test per-session records
   sessionId: string
   // What the shell scripts of restart to update see: the pane, the claude on
   // disk and the last keypress (epoch seconds) of each attached client
@@ -51,7 +51,7 @@ function limitsAt(now: number, used: number, resetInMs: number): SessionRateLimi
   ]
 }
 
-// エンジンの下の世界。どのイベントも、ここが最後に答える
+// The world under the engine. Every event is answered here last
 function world(on: On, limits: SessionRateLimit[] = [], env: Record<string, string> = {}, stored: Record<string, unknown> = {}): World {
   const w: World = {
     runs: [], submitted: [], env: {}, limits, draft: '', isInstalled: true, failNotify: 0, sessionId: ID, clock: mock.clock(on, { now: T0 }),
@@ -136,7 +136,7 @@ describe('readings', () => {
     const full = limits.map(l => (l.kind === 'seven_day' ? { ...l, percentUsed: 100 } : l))
     expect(resetAt(full, T0)).toBe(T0 + 3 * 86_400_000)
     expect(resetAt([], T0)).toBe(undefined)
-    // 長い窓が埋まって開く時刻が分からない: 短い窓の時刻で送っても止まるだけ
+    // The long window is full with no known opening time: sending at the short window's time would only stop again
     const unknown = full.map(l => (l.kind === 'seven_day' ? { kind: l.kind, percentUsed: 100 } : l))
     expect(resetAt(unknown, T0)).toBe(undefined)
   })
@@ -144,7 +144,7 @@ describe('readings', () => {
   test('session start marks the session and hands its reading to fluid.sh', async ($, on) => {
     const w = world(on, limitsAt(T0, 12, 3_600_000))
     await $.session.start({ cwd: '/work', surface: 'terminal', isInteractive: true })
-    // 受け渡しはフックの後ろで続く。走り始めたものを終わらせる
+    // Handing over continues after the hook. Let what started finish
     await w.clock.advance(0)
 
     expect(w.env.FLUID_MOD).toBe('1')
@@ -209,7 +209,7 @@ describe('resume', () => {
     await $.session.start({ cwd: '/work', surface: 'terminal', isInteractive: true })
     await hitLimit($, w)
 
-    // 入力欄を読んでいる最中に、人かエージェント自身が続ける
+    // While the prompt box is being read, a person or the agent itself carries on
     let started = false
     w.onRead = async () => {
       if (started) return
@@ -253,7 +253,7 @@ describe('resume', () => {
     await $.session.start({ cwd: '/work', surface: 'terminal', isInteractive: true })
     await hitLimit($, w)
 
-    // 送られた直後に、そのターンが始まってまた上限に当たる
+    // Right after the send, that turn starts and hits the limit again
     for (let i = 0; i < MAX_ATTEMPTS; i++) {
       for (let k = 0; k < 100 && w.submitted.length <= i; k++) await w.clock.advance(TICK_MS)
       await $.turn.start({ text: 'continue', turnId: `t${i}` })
@@ -271,7 +271,7 @@ describe('resume', () => {
     await $.session.start({ cwd: '/work', surface: 'terminal', isInteractive: true })
     await hitLimit($, w)
 
-    // 入力欄の読み取りが長引き、送った continue のターンはその送信の中で始まる
+    // Reading the prompt box drags on, and the turn of the continue sent starts within that send
     w.onRead = () => w.clock.sleep(15_000)
     w.onSubmit = async () => {
       await $.turn.start({ text: 'continue', turnId: `t${w.submitted.length}` })
@@ -375,7 +375,7 @@ describe('resume', () => {
     await $.session.start({ cwd: '/work', surface: 'terminal', isInteractive: true })
     await hitLimit($, w)
 
-    // 入力欄の読み取りが一周期より長くかかる
+    // Reading the prompt box takes longer than one tick
     w.onRead = () => w.clock.sleep(TICK_MS + 5_000)
     await w.clock.advance(RESET_IN + GRACE_MS + 4 * TICK_MS)
     expect(w.submitted).toEqual(['continue'])
@@ -447,10 +447,10 @@ describe('restart to update', () => {
     w.tmux = { ...NEWER }
     await idle($, w)
     expect(respawns(w).length).toBe(1)
-    // 同じ版へ二度は上げない。ただしそれは、このセッションの話
+    // Never update to the same build twice. But that is this session's record
     await w.clock.advance(IDLE)
     expect(respawns(w).length).toBe(1)
-    // 別のセッションは、その記録に縛られない
+    // Another session is not bound by it
     w.sessionId = '1a2b3c4d-5678-4abc-9def-abcdef012345'
     await w.clock.advance(IDLE)
     expect(respawns(w).length).toBe(2)
@@ -460,11 +460,11 @@ describe('restart to update', () => {
     const w = world(on, [], { AUTO_RESTART_TO_UPDATE: 'on' })
     w.tmux = { ...NEWER }
     await $.session.start({ cwd: '/work', surface: 'terminal', isInteractive: true })
-    // ターンは終わったが、背景のシェルはまだ走っている
+    // The turn has ended but a background shell is still running
     await $.classic.Stop({ background_tasks: [{ id: 'b1', type: 'shell', status: 'running', description: 'npm run build' }] })
     await w.clock.advance(IDLE)
     expect(respawns(w)).toEqual([])
-    // 仕事が終われば、次の Stop がそう言う
+    // Once the work is done, the next Stop says so
     await $.classic.Stop({ background_tasks: [] })
     await w.clock.advance(IDLE)
     expect(respawns(w).length).toBe(1)
@@ -474,11 +474,11 @@ describe('restart to update', () => {
     const w = world(on, [], { AUTO_RESTART_TO_UPDATE: 'on' })
     w.tmux = { ...NEWER }
     await $.session.start({ cwd: '/work', surface: 'terminal', isInteractive: true })
-    // /loop の途中: 背景の仕事はないが、自分で予約した起床を待っている
+    // In the middle of /loop: no background work, but waiting on a wakeup it booked itself
     await $.classic.Stop({ session_crons: [{ id: 'c1', schedule: '*/20 * * * *', recurring: true, prompt: 'check CI' }] })
     await w.clock.advance(IDLE)
     expect(respawns(w)).toEqual([])
-    // 予定がなくなれば、普通の空いたセッション
+    // With nothing planned, an ordinary idle session
     await $.classic.Stop({ session_crons: [] })
     await w.clock.advance(IDLE)
     expect(respawns(w).length).toBe(1)
@@ -488,7 +488,7 @@ describe('restart to update', () => {
     const w = world(on, [], { AUTO_RESTART_TO_UPDATE: 'on' })
     w.tmux = { ...NEWER }
     await $.session.start({ cwd: '/work', surface: 'terminal', isInteractive: true })
-    // 子エージェントの Stop は、親のセッションの話ではない
+    // A subagent's Stop is not about the parent session
     await $.classic.Stop({ agent_id: 'sub-1', background_tasks: [{ id: 'b2', type: 'subagent', status: 'running', description: 'review' }], session_crons: [] })
     await w.clock.advance(IDLE)
     expect(respawns(w).length).toBe(1)

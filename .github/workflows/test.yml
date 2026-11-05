@@ -33,7 +33,7 @@ jobs:
       # jq ships with both runners; claude, at and launchctl are faked
       - run: bash tests/run.sh
 
-  # プラグインのフック・モジュール: 最新の Claude Code で検証し、テストする
+  # The plugin's hooks module: validated and tested against the latest Claude Code
   hooks-module:
     runs-on: ubuntu-latest
     timeout-minutes: 10

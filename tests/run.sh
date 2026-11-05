@@ -25,8 +25,8 @@ trap 'rm -rf "$CP_TEST"' EXIT
 # switches to launchd itself
 export FLUID_SCHEDULER=at
 
-# Fluid のフック・モジュールが動いている Claude Code の中からテストを走らせても、
-# その印を持ち込まない。必要な所では各テストが自分で立てる
+# Running the tests from inside a Claude Code with Fluid's hooks module loaded must
+# not carry its marker in. Each test sets it itself where it is needed
 unset FLUID_MOD
 
 PASS=0
@@ -57,7 +57,7 @@ if [[ "$1" == -c ]]; then
     cat "$q/$2" 2>/dev/null
     exit
 fi
-# 本物の at と同じく、提出時の作業ディレクトリと環境をジョブと一緒に記録する
+# Like the real at, record the submitting working directory and environment with the job
 pwd > "$CP_TEST/at-cwd"
 env > "$CP_TEST/at-env"
 if [[ -e "$CP_TEST/at-refuse" ]]; then
@@ -70,7 +70,7 @@ cat > "$q/$n"
 echo "job $n at $2"
 EOF
 
-# 本物と同じく最後の列が持ち主。ジョブに "# owner=" の行があればその人のもの
+# Like the real one, the last column is the owner. A job with an "# owner=" line belongs to that user
 cat > "$FAKES/atq" <<'EOF'
 #!/usr/bin/env bash
 for f in "$CP_TEST/queue"/*; do
@@ -101,7 +101,7 @@ case "$(cat "$CP_TEST/claude-mode" 2>/dev/null)" in
     expiring) echo "Warning: this sign-in can end at any time from now until 2026-11-04. Renewing it does not move that date."; echo OK ;;
     expired) echo "Failed to authenticate: this login reached its time limit and cannot be renewed. Run \`claude auth login\` to sign in again" >&2; exit 1 ;;
     fail) echo "API Error: Overloaded" >&2; exit 1 ;;
-    # 応答に時間のかかる warmup
+    # A warmup that takes a while to answer
     slow) sleep 2; echo OK ;;
     # An agent that has dropped the model it is asked for
     badmodel)
@@ -124,7 +124,7 @@ fi
 echo "$*" >> "$CP_TEST/codex-runs"
 pwd > "$CP_TEST/codex-cwd"
 case "$(cat "$CP_TEST/codex-mode" 2>/dev/null)" in
-    # 終了後もバックグラウンドに子プロセスを残すエージェント
+    # An agent that leaves a child running in the background after it exits
     child) sleep 5 </dev/null >/dev/null 2>&1 & ;;
 esac
 echo codex-ok
@@ -185,7 +185,7 @@ done
 printf Y
 EOF
 
-# 自分のプロセスグループに子を残す状態栏
+# A status line that leaves a child in its own process group
 cat > "$FAKES/spawner" <<'EOF'
 #!/usr/bin/env bash
 sleep 30 </dev/null >/dev/null 2>&1 &
@@ -194,7 +194,7 @@ cat >/dev/null
 printf Y
 EOF
 
-# mv: 設定ファイルへの mv を、$CP_TEST/mv-allow に書いた回数だけ通し、それ以降は失敗する
+# mv: lets an mv onto a settings file through as many times as $CP_TEST/mv-allow says, then fails
 cat > "$FAKES/mv" <<'EOF'
 #!/usr/bin/env bash
 if [[ -e "$CP_TEST/mv-allow" && "${@: -1}" == *settings.json ]]; then
@@ -240,7 +240,7 @@ EOF
 
 chmod +x "$FAKES"/*
 
-# claude だけが PATH にない環境: 偽のコマンドから claude を除き、jq を足す
+# Only claude off PATH: take claude out of the fake commands and add jq
 NOCLAUDE="$CP_TEST/noclaude"
 mkdir -p "$NOCLAUDE"
 for _f in "$FAKES"/*; do
@@ -436,7 +436,7 @@ check "pre-existing empty group kept" \
     '[[ $(strip "{\"hooks\":{\"E\":[{\"hooks\":[]}]}}") == "$(norm "{\"hooks\":{\"E\":[{\"hooks\":[]}]}}")" ]]'
 check "user empty hooks object kept" \
     '[[ $(strip "{\"hooks\":{}}") == "{\"hooks\":{}}" ]]'
-# 我々のコマンドに手を加えたもの、我々のスクリプトを呼ぶ別のコマンドは利用者のもの
+# A changed copy of our command, or another command calling our script, belongs to the user
 for theirs in "$W statusline agy; echo done" "/opt/audit && $W rate-limit claude" "$W statusline agy | tee /tmp/x"; do
     check "a command of the user's that calls ours stays: $theirs" \
         '[[ $(strip "{\"statusLine\":{\"command\":\"$theirs\"},\"hooks\":{\"E\":[{\"hooks\":[{\"command\":\"$theirs\"}]}]}}" /x) == "$(norm "{\"statusLine\":{\"command\":\"$theirs\"},\"hooks\":{\"E\":[{\"hooks\":[{\"command\":\"$theirs\"}]}]}}")" ]]'
@@ -447,7 +447,7 @@ for odd in '{"statusLine":"text"}' '{"hooks":[]}' '{"hooks":{"X":"s"}}' '{"hooks
     check "odd shape passes through: $odd" '[[ $(strip "$odd") == "$(norm "$odd")" ]]'
 done
 
-# HOME に空白があっても、包んだ状態栏は動き、きれいに外れる
+# With a space in HOME the wrapped status line still works and comes out cleanly
 new_home "with space"
 with_cs
 install_cp >/dev/null
@@ -560,7 +560,7 @@ done
 # ======================================================================
 section "the probe tells one agent's status line from another's"
 
-# 調べるために起こした状態栏が、子プロセスを後に残さない
+# A status line started for checking leaves no child behind
 new_home probe-children
 with_cs
 install_cp >/dev/null
@@ -568,13 +568,13 @@ jq --arg c "$FAKES/spawner" '.statusLine.command = $c' "$S" > "$S.t" && mv "$S.t
 rm -f "$CP_TEST/spawned"
 install_cp uninstall >/dev/null 2>&1
 check "the probe ran it"                  '[[ -s "$CP_TEST/spawned" ]]'
-# 止めた子が回収されずにゾンビで残る環境（PID 1 が回収しないコンテナ）もある
+# Some places leave a stopped child unreaped as a zombie (containers whose PID 1 does not reap)
 check "and nothing it started outlives it" '[[ $(ps -o stat= -p "$(cat "$CP_TEST/spawned")" 2>/dev/null) != [!Z]* ]]'
 
 # ======================================================================
 section "uninstall cleans up what it can, and waits for what is running"
 
-# claude が PATH から見えなくなっても、設定に残した痕跡は消える
+# The traces left in the settings come out even once claude is off PATH
 new_home gone-claude
 with_cs
 install_cp >/dev/null
@@ -582,7 +582,7 @@ HOME="$H" PATH="$NOCLAUDE_PATH" bash "$INSTALLER" uninstall >/dev/null 2>&1
 check "status line and hook taken out without claude on PATH" '! grep -qF "$MARKER" "$S" && [[ $(jq -r .statusLine.command "$S") == "$FAKES/cs" ]]'
 check "and the rest removed"                                  '[[ ! -e "$BASE" && $(our_jobs) == 0 ]]'
 
-# 走っている warmup が終わるのを待ってから消す
+# Wait for a running warmup to finish before deleting
 new_home inflight
 with_cs
 install_cp >/dev/null
@@ -595,8 +595,8 @@ wait "$runner"
 check "it says it is waiting"                     '[[ $out == *"Waiting for a run in progress"* ]]'
 check "the finished warmup leaves nothing behind" '[[ ! -e "$BASE" && $(our_jobs) == 0 ]]'
 
-# 状態栏の更新が卸す最中にも読み取りを渡してくる。消している最中のディレクトリに
-# 書き込まれても卸しは失敗せず、終わった後に ~/.fluid が作り直されることもない
+# A status line refresh hands over readings even while uninstalling. Writes into the
+# directory being deleted do not fail the uninstall, and ~/.fluid is not recreated after it
 new_home busy
 with_cs
 install_cp >/dev/null
@@ -615,7 +615,7 @@ check "readings during uninstall: it still succeeds" '[[ $rc == 0 ]]'
 check "and nothing is built back up afterwards"     '[[ ! -e "$BASE" ]] && ! compgen -G "$BASE.removing.*" >/dev/null'
 check "and no job is left for the script it removed" '[[ $(our_jobs) == 0 ]]'
 
-# 他のユーザーのジョブには触れない（root の atq には全員のジョブが並ぶ）
+# Other users' jobs are left alone (root's atq lists everyone's jobs)
 new_home others
 with_cs
 install_cp >/dev/null
@@ -650,7 +650,7 @@ install_cp >/dev/null
 T="$(( $(date +%s) + 3600 ))"
 printf '{"rate_limits":{"five_hour":{"used_percentage":10,"resets_at":%s}}}' "$T" | cp_run observe claude >/dev/null
 check "a run is planned"            '[[ $(our_jobs) == 1 ]]'
-# 古い設定を取り除く書き換えは通り、包み直す書き換えで失敗する
+# The rewrite removing the old settings goes through; the one wrapping again fails
 echo 1 > "$CP_TEST/mv-allow"
 out="$(install_cp 2>&1)"; rc=$?
 rm -f "$CP_TEST/mv-allow"
@@ -690,7 +690,7 @@ check "old job replaced"           '[[ ! -e "$QUEUE/7" && $(our_jobs) == 1 ]]'
 check "same target re-armed"       '[[ $(cat "$BASE/state/claude/at_target") == "$target" ]]'
 check "same reason kept"           '[[ $(cat "$BASE/state/claude/at_reason") == pending-rate-limit ]]'
 
-# 0.2.x の tmux 再開が残した記録は、アップグレードで片付ける
+# What 0.2.x's tmux resume left behind is cleared on upgrade
 mkdir -p "$BASE/state/claude/pending" "$BASE/state/claude/resume.lock.d"
 echo '{"session":"old"}' > "$BASE/state/claude/pending/old.json"
 echo 9 > "$BASE/state/claude/resume_job"
@@ -862,7 +862,7 @@ wait_until '[[ $(cat "$BASE/state/claude/stall_checked_at") != 0 ]]'
 sleep 0.3
 check "marked: not sent again"              '[[ $(count scheduler-stalled notify-attempts) == 2 ]]'
 
-# 別のエージェントの予約が動いても、Claude Code の予約が止まっていることに変わりはない
+# Another agent's reservation running does not mean Claude Code's has not stalled
 cp_run scheduled codex >/dev/null 2>&1
 check "another agent's run does not clear it" '[[ -e "$BASE/state/claude/notified-stalled" && $(count recovered notify-attempts) == 0 ]]'
 
@@ -874,7 +874,7 @@ check "status shows the last run"           '[[ $(cp_run status) == *"Last run  
 # ======================================================================
 section "a slow stall check never holds up the status line"
 
-# flock のない macOS と同じ mkdir のロックを Linux でも通すための PATH
+# PATH for taking macOS's mkdir lock, with no flock, on Linux too
 NOFLOCK="$CP_TEST/noflock"
 mkdir -p "$NOFLOCK"
 for _f in /usr/local/bin/* /usr/bin/* /bin/*; do
@@ -889,8 +889,8 @@ for LOCKS in flock mkdir; do
     mkdir -p "$BASE/state/claude"
     if [[ "$LOCKS" == flock ]]; then LPATH="$FAKES:$PATH"; else LPATH="$FAKES:$NOFLOCK"; fi
 
-    # 遅い notifier: 停止チェックが走っている間を長く取る。次の読み取りに許す
-    # 5 秒より十分長く、遅い bash 3.2 が混んだ機械で動いても取り違えない
+    # A slow notifier keeps the stall check running for long. Well over the 5 seconds
+    # allowed for the next reading, so a slow bash 3.2 on a busy machine does not mix them up
     cat > "$BASE/notify.sh" <<'EOF'
 #!/usr/bin/env bash
 sleep 8
@@ -903,8 +903,8 @@ EOF
             HOME="$H" PATH="$LPATH" tmo "$1" "$CP" observe claude >/dev/null 2>&1
     }
 
-    # at が予約を受け付けず、期限切れの予約も取り消せない（atd の spool に
-    # 書けないなど）。読み取りのたびに予約を試みて失敗し、停止チェックが起きる
+    # at accepts no reservation and cannot cancel an overdue one either (atd's spool not
+    # writable, say). Every reading tries to schedule, fails, and the stall check fires
     echo $(( $(date +%s) - 400 )) > "$BASE/state/claude/at_target"
     echo "$CP scheduled" > "$QUEUE/5"
     echo 5 > "$BASE/state/claude/at_job"
@@ -915,12 +915,12 @@ EOF
     stall_reading 5; rc=$?
     check "$LOCKS: the next reading is not kept waiting" '[[ $rc == 0 ]]'
 
-    # 生きている別のプロセスが持つロックを、停止チェックの終わりに消してはならない
+    # A lock held by another live process must not be removed at the end of the stall check
     sleep 30 &
     holder=$!
     mkdir -p "$BASE/state/claude/schedule.lock.d"
     echo "$holder" > "$BASE/state/claude/schedule.lock.d/pid"
-    # notifier は 8 秒かかる。wait_until 一回は 3 秒までなので、四回まで待つ
+    # The notifier takes 8 seconds. One wait_until waits up to 3, so wait up to four times
     for _ in 1 2 3 4; do
         wait_until '[[ $(count scheduler-stalled notify-delivered) == 1 ]]' && break
     done
@@ -940,7 +940,7 @@ new_home warmlock
 echo '{}' > "$S"
 install_cp >/dev/null
 
-# エージェントが残した子プロセスが、次の warmup を締め出さない
+# A child the agent left behind does not lock the next warmup out
 echo child > "$CP_TEST/codex-mode"
 cp_run warmup codex >/dev/null 2>&1
 cp_run warmup codex >/dev/null 2>&1
@@ -967,8 +967,8 @@ check "nor any token it had (at keeps them on disk)" '! grep -q "^GITHUB_TOKEN="
 check "but with what an agent needs to run"        'grep -qx "HOME=$H" "$CP_TEST/at-env" && grep -q "^PATH=$FAKES:" "$CP_TEST/at-env" && grep -qx "HTTPS_PROXY=http://proxy:3128" "$CP_TEST/at-env"'
 check "state and log readable by the user alone"   '[[ -z $(find "$BASE" -perm -004 -o -perm -040 | head -1) ]]'
 
-# 番号が使い回されて、他人のジョブが同じ番号になった（root の atq には全員の
-# ジョブが並ぶ）。予約し直しても、それを自分のものとして消さない
+# A job number came round again and someone else's job now has it (root's atq lists
+# everyone's jobs). Rescheduling does not delete it as ours
 other="$(cat "$BASE/state/claude/at_job")"
 printf '# owner=someoneelse\n/home/someoneelse/.fluid/fluid.sh scheduled claude\n' > "$QUEUE/$other"
 printf '{"rate_limits":{"five_hour":{"used_percentage":10,"resets_at":%s}}}' "$(( $(date +%s) + 7200 ))" |
@@ -997,7 +997,7 @@ check "claude planned on its own"    '[[ $(cat "$BASE/state/claude/at_target") =
 check "codex plan untouched"         '[[ $(cat "$BASE/state/codex/at_target") == $(( NOW + 1815 )) ]]'
 check "a job each now"               '[[ $(our_jobs) == 2 ]]'
 
-# まだ開いている窓（誰かが使った）: warmup せず、その reset に予約し直す
+# A window still open (someone used it): no warmup, reschedule to its reset
 codex_log "$(( NOW + 900 ))" "$(( NOW + 200000 ))"
 cp_run scheduled codex >/dev/null 2>&1
 check "an open window is not warmed up again" '[[ ! -e "$CP_TEST/codex-runs" && $(cat "$BASE/state/codex/at_target") == $(( NOW + 915 )) ]]'
@@ -1044,7 +1044,7 @@ check "a refused job leaves the planned one queued" '[[ -e "$QUEUE/$job" && $(ca
 wait_until '[[ $(count schedule-failed notify-delivered) == 1 ]]'
 check "and says so"                                 '[[ $(count schedule-failed notify-delivered) == 1 ]]'
 
-# 失敗したのが最後のエージェントでなくても、失敗として返す
+# A failure counts as one even when it was not the last agent
 echo 999 > "$BASE/state/claude/at_job"
 cp_run reschedule >/dev/null 2>&1; rc=$?
 check "reschedule fails when any agent could not be planned" '[[ $rc != 0 ]]'
@@ -1055,7 +1055,7 @@ reading_at "$(( T + 600 ))"
 wait_until '[[ $(count recovered notify-delivered) == 1 ]]'
 check "once it works again: replaced, and said so" '[[ ! -e "$QUEUE/$job" && $(our_jobs) == 1 && $(count recovered notify-delivered) == 1 ]]'
 
-# warmup の間に届いた公式の reset を、見積もりで上書きしない
+# An official reset that came in during the warmup is not overwritten by an estimate
 echo slow > "$CP_TEST/claude-mode"
 cp_run warmup claude >/dev/null 2>&1 &
 warmer=$!
@@ -1075,8 +1075,8 @@ wait "$warmer"
 check "a stale reading during a warmup leaves the next window planned" '[[ $(cat "$BASE/state/claude/at_reason") == estimated-next-reset && $(cat "$BASE/state/claude/at_target") -gt $(date +%s) && $(our_jobs) == 1 ]]'
 install_cp uninstall >/dev/null
 
-# npx は node_modules/.bin に相対のリンクを置く。readlink -f のない macOS でも
-# 通知の見本まで入る
+# npx puts relative links in node_modules/.bin. Even on macOS, with no readlink -f,
+# the notifier samples come along
 new_home npx
 echo '{}' > "$S"
 NPX="$CP_TEST/npx/node_modules"
@@ -1111,14 +1111,14 @@ check "not reported again"         '[[ $(count agent-missing notify-attempts) ==
 cp_run scheduled claude >/dev/null 2>&1
 check "back again: says so"        '[[ $(count recovered notify-delivered) == 1 && ! -e "$BASE/state/claude/notified-missing" ]]'
 
-# 更新の時だけ PATH から見えなかったエージェントも、予約を失わず、status にも出る
+# An agent off PATH only during the upgrade keeps its reservation and shows in status
 target="$(cat "$BASE/state/claude/at_target")"
 HOME="$H" PATH="$NOCLAUDE_PATH" bash "$INSTALLER" >/dev/null 2>&1
 check "an upgrade keeps the plan of an agent off PATH" '[[ $(cat "$BASE/state/claude/at_target") == "$target" ]] && grep -lF "scheduled claude" "$QUEUE"/* >/dev/null 2>&1'
 check "and status still shows it, missing"             '[[ $(HOME="$H" PATH="$NOCLAUDE_PATH" "$CP" status) == *"[claude]"*"NOT FOUND on PATH"* ]]'
 check "an agent with nothing yet: no readings"         '[[ $(cp_run status) == *"Readings      : none yet"* ]]'
 
-# warmup はどこから呼ばれても / で動く
+# The warmup runs from / wherever it is called from
 PROJ="$CP_TEST/project-warm"
 mkdir -p "$PROJ"
 ( cd "$PROJ" && cp_run warmup codex >/dev/null 2>&1 )
@@ -1151,8 +1151,8 @@ check "RFC 3339 becomes an epoch"       '[[ $(cat "$BASE/state/agy/resets_at") =
 check "long window read too"            '[[ $(cat "$BASE/state/agy/long_used_percent") == 10 ]]'
 check "planned from its own reading"    '[[ $(cat "$BASE/state/agy/at_target") == $(( NOW + 1215 )) ]]'
 
-# 週の窓を報告しなくなった読み取り: 古い週の値を残さない。何も報告しない
-# 読み取り（まだ使っていないセッション）は何も変えない
+# A reading that stopped reporting the weekly window does not keep the old week's values.
+# A reading that reports nothing (a session not used yet) changes nothing
 printf '{"quota":{"gemini-5h":{"remaining_fraction":0.5,"reset_time":"%s"}}}' "$RESET" | cp_run observe agy >/dev/null
 check "a long window no longer reported is dropped" '[[ ! -e "$BASE/state/agy/long_used_percent" && $(cat "$BASE/state/agy/used_percent") == 50 ]]'
 printf '{"quota":{}}' | cp_run observe agy >/dev/null
@@ -1198,7 +1198,7 @@ anchor_cases() {
     run "2026-09-21 20:01" "01:00" "2026-09-22 01:00"   # a minute inside the end
     run "2026-09-21 21:00" "00:00" "2026-09-22 00:00"   # midnight anchor, held
     run "2026-09-21 00:30" "00:00" "2026-09-21 00:30"   # midnight anchor, missed
-    # 夏時間に入る日の前夜: 23 時間の日をまたいでも、日付を一つ飛ばさない
+    # The night before daylight saving starts: crossing a 23-hour day skips no date
     TZ=America/New_York run "2026-03-07 23:30" "01:00" "2026-03-08 01:00"
     run "2026-09-21 03:00" "nonsense" "2026-09-21 03:00"
     run "2026-09-21 03:00" "" "2026-09-21 03:00"
@@ -1258,7 +1258,7 @@ cp_run anchor "$(at_hhmm 7200)" >/dev/null
 check "setting one re-plans the next run" '[[ $(cat "$BASE/state/claude/at_target") == $(at_epoch 7200) && $(cat "$BASE/state/claude/at_reason") == anchor-hold ]]'
 check "only one job of ours is queued"    '[[ $(our_jobs) == 1 ]]'
 
-# 押さえた後で外すと、押さえる前の時刻に戻る（次の読み取りを待たずに）
+# Clearing the anchor goes back to the time before it was set (without waiting for the next reading)
 cp_run anchor off >/dev/null
 check "clearing it undoes the hold at once" '[[ $(cat "$BASE/state/claude/at_target") == $(( NOW + 60 )) && $(cat "$BASE/state/claude/at_reason") == official-reset && $(our_jobs) == 1 ]]'
 cp_run anchor "$(at_hhmm 7200)" >/dev/null
@@ -1355,7 +1355,7 @@ cp_run notify resume-failed "It is waiting for you."; rc=$?
 check "the module's log lines reach the log"            'grep -q "\[claude\] Sending continue to the stopped session, attempt 1" "$BASE/fluid.log"'
 check "and its alerts the notifier"                     '[[ $rc == 0 && $(count resume-failed notify-delivered) == 1 ]]'
 
-# 予約した at ジョブに、モジュールの印を持ち込まない
+# No module marker is carried into a scheduled at job
 rm -f "$CP_TEST/at-env"
 printf '{"rate_limits":{"five_hour":{"used_percentage":40,"resets_at":%s}}}' "$(( T + 600 ))" |
     in_home env FLUID_MOD=1 "$CP" observe claude mod
@@ -1363,7 +1363,7 @@ check "a queued run carries no module mark"             '[[ -s "$CP_TEST/at-env"
 install_cp uninstall >/dev/null
 check "uninstall leaves Claude Code settings as found"  '[[ $(cksum < "$CS") == "$before" && ! -e "$BASE" ]]'
 
-# モジュールが読み込まれていないセッション、プラグインなしのインストール: 状態栏は包まず、そう伝える
+# A session without the module loaded, an install without the plugin: no status line wrapped, and it says so
 new_home nomodule
 printf '{"statusLine":{"type":"command","command":"%s"}}\n' "$FAKES/cs" > "$CS"
 before="$(cksum < "$CS")"
@@ -1465,10 +1465,10 @@ rm -f "$CP_TEST/claude-runs"
 launchd_run() {
     env -i HOME="$H" CP_TEST="$CP_TEST" PATH="${JOBPATH:-/usr/bin:/bin:/usr/sbin:/sbin}" "$@"
 }
-# 読み込まれた直後（時刻の前）は何もしない
+# Just after loading (before the time) it does nothing
 launchd_run "${ARGV[@]}"
 check "before its time: waits"                 '[[ -e $P && ! -e "$CP_TEST/claude-runs" ]]'
-# 時刻を過ぎていれば（逃した予約をログイン時に拾うときも）走る
+# Once the time has passed (also when catching a missed reservation at login) it runs
 ARGV[${#ARGV[@]}-1]=0
 launchd_run "${ARGV[@]}"
 check "the agent deletes itself and warms up" '[[ ! -e $P && $(count run claude-runs) == 1 ]]'

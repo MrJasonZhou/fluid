@@ -6,27 +6,27 @@
 // Free Software Foundation, either version 3 of the License, or (at your
 // option) any later version. See the LICENSE file for details.
 
-// Claude Code の中で動くフック・モジュール。状態栏を包まずに使用量の読み取りを
-// fluid.sh へ渡し、上限で止まったセッションをプロセスの中から再開させる。
-// どの設定ファイルにも手を付けない。
+// The hooks module running inside Claude Code. It hands usage readings to fluid.sh
+// without wrapping the status line, and resumes sessions stopped on a limit from inside the process.
+// It touches no settings file.
 //
-// このモジュールが読み込まれたセッションでは FLUID_MOD=1 を立てる。そこから
-// 起動される /fluid:install はそれを見て、読み取りが届くかどうかを伝える。
-// Claude Code の読み取りと再開は、0.3.0 からこのモジュールだけが受け持つ。
+// Sessions that load this module get FLUID_MOD=1. A /fluid:install started from
+// one sees it and says whether readings will arrive.
+// Since 0.3.0 this module alone handles Claude Code's readings and resume.
 
 import type { EngineInterface, Register, SessionRateLimit } from 'claude-code'
 
-// fluid.sh の RESUME_GRACE と同じ: リセットの後、エージェント自身の続行に先を譲る時間
+// Same as fluid.sh's RESUME_GRACE: time after a reset left for the agent to carry on by itself
 export const GRACE_MS = 180_000
-// continue を送ってから、効いたかどうかを見るまでの時間
+// Time between sending continue and checking whether it worked
 export const VERIFY_MS = 90_000
-// 送っても止まったままなら、この回数であきらめて知らせる
+// Give up and say so after this many sends that leave it stopped
 export const MAX_ATTEMPTS = 2
-// 待っている間の見回りの間隔。スリープから覚めても次の見回りで追いつく
+// How often to look while waiting. Waking from sleep catches up on the next look
 export const TICK_MS = 30_000
-// あきらめたことを知らせられなかったとき、知らせ直すまでの間隔
+// How long before retrying to say it gave up, when that could not be delivered
 export const NOTIFY_RETRY_MS = 600_000
-// 自分が送った continue で始まったターンを、他人のものと取り違えない幅
+// Margin for not mistaking a turn started by our own continue for someone else's
 const OWN_TURN_MS = 10_000
 
 type Reading = {
@@ -34,28 +34,28 @@ type Reading = {
 }
 
 type Pending = {
-  // 次に見る時刻
+  // When to look next
   dueAt: number
-  // 送った回数
+  // How many times it was sent
   attempts: number
-  // 最後に送った時刻
+  // When it was last sent
   sentAt?: number
-  // continue を送っている最中。その間に始まるターンは自分のもの
+  // Sending continue right now. A turn starting meanwhile is ours
   isSending?: boolean
 }
 
-// セッションの間だけ持つ状態。モジュールが読み直されれば初めからになる
+// State held only for the session. Reloading the module starts it afresh
 type State = {
   limits: readonly SessionRateLimit[]
   pending?: Pending
   isTurnRunning: boolean
   ticker?: { cancel: () => void }
-  // 見回りの途中。一回の見回りが次の周期より長引いても、二つ目は走らせない
+  // In the middle of a look. A look outlasting the next tick does not get a second one
   isTicking?: boolean
 }
 
-// Claude Code の rateLimits を、状態栏が渡す JSON と同じ形にする。fluid.sh の
-// claude_parse_limits はそのまま読める
+// Shape Claude Code's rateLimits like the JSON the status line hands over, so fluid.sh's
+// claude_parse_limits reads it as is
 export function toReading(limits: readonly SessionRateLimit[]): Reading | undefined {
   const windows: Reading['rate_limits'] = {}
 
@@ -73,15 +73,15 @@ export function toReading(limits: readonly SessionRateLimit[]): Reading | undefi
   return Object.keys(windows).length > 0 ? { rate_limits: windows } : undefined
 }
 
-// どれかの窓が使い切られているか。組織が管理する Claude Code では StopFailure が
-// 入れたプラグインに届かないので、エラーで終わったターンをこれで見分ける
+// Whether any window is used up. In an organisation-managed Claude Code StopFailure does
+// not reach installed plugins, so this is how a turn that ended in an error is told apart
 export function isLimited(limits: readonly SessionRateLimit[]): boolean {
   return limits.some(l => (l.kind === 'five_hour' || l.kind === 'seven_day') && l.percentUsed >= 99.9)
 }
 
-// 止めた窓が開く時刻（ミリ秒）。長い窓が埋まっていればそちら、なければ短い窓。
-// 長い窓が埋まっていて開く時刻が分からなければ、分からないと答える: 短い窓の
-// 時刻に送っても、また止まるだけ
+// When the window that stopped it opens (ms): the long one when it is full, else the short one.
+// With the long window full and its opening unknown, answer unknown: sending at the short
+// window's time would only stop again
 export function resetAt(limits: readonly SessionRateLimit[], now: number): number | undefined {
   const parse = (kind: string) => {
     const limit = limits.find(l => l.kind === kind)
@@ -97,24 +97,24 @@ export function resetAt(limits: readonly SessionRateLimit[], now: number): numbe
   return Number.isNaN(short.t) || short.t <= now ? undefined : short.t
 }
 
-// fluid.sh を一度呼ぶ。入っていなければ（/fluid:install の前）何もしない。
-// うまくいったかどうかを返す
+// Call fluid.sh once. Does nothing when it is not installed (before /fluid:install).
+// Returns whether it worked
 async function fluid($: EngineInterface, args: string[], stdin?: string): Promise<boolean> {
   const home = await $.env.get('HOME')
   if (home === undefined) return false
   try {
-    // at への書き込みの途中で止めると、半端なジョブが残る（0.2.3）。待つのは
-    // フックではないので、余裕を持たせる
+    // Stopping in the middle of writing to at leaves a half-made job (0.2.3). What waits here
+    // is not a hook, so give it room
     const result = await $.process.run([`${home}/.fluid/fluid.sh`, ...args], { cwd: '/', stdin, timeoutMs: 60_000 })
     return result.exitCode === 0
   } catch {
-    // 未インストール、または一時的な失敗。次の読み取りがまた届く
+    // Not installed, or a passing failure. The next reading comes round again
     return false
   }
 }
 
-// Fluid が入っているか。プラグインだけが入っている、または /fluid:uninstall の
-// 後は、セッションに何も送らない
+// Whether Fluid is installed. With only the plugin in, or after /fluid:uninstall,
+// nothing is sent to the session
 async function isInstalled($: EngineInterface): Promise<boolean> {
   const home = await $.env.get('HOME')
   if (home === undefined) return false
@@ -136,7 +136,7 @@ function stopWatching(state: State) {
   state.pending = undefined
 }
 
-// 待っている再開の見回り。重ならないように一つずつ
+// Looking after a waiting resume, one at a time so they do not overlap
 async function tick($: EngineInterface, state: State) {
   if (state.isTicking) return
   state.isTicking = true
@@ -154,7 +154,7 @@ async function tickOnce($: EngineInterface, state: State) {
   const now = await $.clock.now()
   if (now < pending.dueAt || state.isTurnRunning) return
 
-  // あきらめたことは、届くまで知らせ直す（通知の設定がまだ、一時的な失敗）
+  // Saying it gave up is retried until delivered (notifier not set up yet, a passing failure)
   if (pending.attempts >= MAX_ATTEMPTS) {
     const isDelivered = await fluid($, ['notify', 'resume-failed',
       `Claude Code did not continue a session after its usage limit reset, and neither did Fluid after ${pending.attempts} tries. It is waiting for you.`])
@@ -164,15 +164,15 @@ async function tickOnce($: EngineInterface, state: State) {
     return
   }
 
-  // 待っている間に /fluid:uninstall されていれば、もう送らない。入力欄を
-  // 読む前に確かめる: 読んでから送るまでの間には何も待たない
+  // If /fluid:uninstall ran during the wait, send nothing more. Check before reading
+  // the prompt box: nothing waits between reading it and sending
   if (!(await isInstalled($))) {
     stopWatching(state)
     return
   }
   if (state.pending !== pending || state.isTurnRunning) return
 
-  // 入力欄に書きかけがあれば、誰かがそこにいる。混ぜて送らずに任せる
+  // Something half-typed in the prompt box means someone is there. Leave it to them rather than mix in
   const box = await $.prompt.read()
   if (box.text.trim() !== '') {
     stopWatching(state)
@@ -180,7 +180,7 @@ async function tickOnce($: EngineInterface, state: State) {
     return
   }
 
-  // 入力欄を読んでいる間に誰か（エージェント自身を含む）が続けていれば送らない
+  // If someone (the agent itself included) carried on while the prompt box was read, do not send
   if (state.pending !== pending || state.isTurnRunning) return
 
   pending.attempts += 1
@@ -190,16 +190,16 @@ async function tickOnce($: EngineInterface, state: State) {
   } finally {
     pending.isSending = false
   }
-  // 時刻は送った後で取る。入力欄の読み取りが長引いても、自分のターンを
-  // 他人のものと取り違えない
+  // Take the time after sending, so a slow prompt box read does not make our own turn
+  // look like someone else's
   pending.sentAt = await $.clock.now()
   pending.dueAt = pending.sentAt + VERIFY_MS
   void fluid($, ['log', 'claude', `Sent continue to the stopped session, attempt ${pending.attempts}`])
 }
 
-// 上限で止まった: リセットとその後の猶予を待って見回る
+// Stopped on a limit: look again after the reset and the grace after it
 async function stopped($: EngineInterface, state: State) {
-  // Fluid が入っていなければ、止まったセッションには手を出さない
+  // With Fluid not installed, a stopped session is left alone
   if (!(await isInstalled($))) {
     stopWatching(state)
     return
@@ -209,9 +209,9 @@ async function stopped($: EngineInterface, state: State) {
   state.limits = (await $.session.usage()).rateLimits
   const reset = resetAt(state.limits, now)
 
-  // 開く時刻の分かる使用量の窓（サブスクリプションの 5 時間・週）がなければ、
-  // 止めたのは API キーや gateway の 429 など、Fluid の扱う窓ではない。
-  // 従量課金で人のいない間に続けることになるので、送らない
+  // Without a usage window with a known opening time (the subscription's 5-hour or weekly),
+  // what stopped it is not a Fluid window: an API key, a gateway's 429 and the like.
+  // Carrying on would mean paying per use while nobody is there, so do not send
   if (reset === undefined) {
     stopWatching(state)
     await fluid($, ['log', 'claude', 'Stopped on a limit with no usage window to wait for; not resuming'])
@@ -220,10 +220,10 @@ async function stopped($: EngineInterface, state: State) {
 
   const dueAt = reset + GRACE_MS
 
-  // StopFailure と、エラーで終わったターンの両方が同じ停止を知らせることがある
+  // StopFailure and a turn ending in an error can both report the same stop
   if (state.pending !== undefined && state.pending.sentAt === undefined && state.pending.dueAt === dueAt) return
 
-  // 送った continue がまた上限に当たったときは、回数を持ち越す
+  // When the continue sent hits the limit again, the count carries over
   state.pending = { dueAt, attempts: state.pending?.attempts ?? 0 }
   state.isTurnRunning = false
   state.ticker ??= $.clock.every(TICK_MS, () => void tick($, state))
@@ -232,7 +232,7 @@ async function stopped($: EngineInterface, state: State) {
     `Usage limit hit; the hooks module looks again at ${new Date(state.pending.dueAt).toISOString()}`])
 }
 
-// 本線のターンが始まった。エージェント自身か人が続けたなら、待つのをやめる
+// A main-thread turn started. If the agent itself or a person carried on, stop waiting
 async function turnStarted($: EngineInterface, state: State) {
   state.isTurnRunning = true
   const pending = state.pending
@@ -453,7 +453,7 @@ export const register: Register = on => {
     return result
   })
 
-  // 読み取りの受け渡しは待たない: フックには持ち時間がある
+  // Do not wait for the readings to be handed over: hooks have a time budget
   on('session.measure', ($, e, next) => {
     if (e.changed.includes('rateLimits')) {
       state.limits = e.rateLimits
@@ -475,9 +475,9 @@ export const register: Register = on => {
     if (e.agentId === undefined) {
       await restartActivity($, restart, false).catch(() => {})
       state.isTurnRunning = false
-      // 送った continue が答えまで進んだ: 再開できた
+      // The continue sent got as far as an answer: resumed
       if (state.pending?.sentAt !== undefined && e.reason === 'answer') stopWatching(state)
-      // エラーで終わり、窓が使い切られている: 上限で止まった
+      // Ended in an error with a window used up: stopped on a limit
       if (e.reason === 'error' && isLimited((await $.session.usage()).rateLimits)) await stopped($, state)
     }
     return result
@@ -496,8 +496,8 @@ export const register: Register = on => {
     return next(e)
   })
 
-  // 見るだけのフック: Stop が、まだ走っている背景の仕事と、この先この
-  // セッションを起こす予定を運んでくる。終われば、次のターンの Stop が直す
+  // Look-only hook: Stop brings the background work still running and anything planned
+  // to wake this session later. Once they end, the next turn's Stop puts it right
   on('classic.Stop', async ($, e, next) => {
     const result = await next(e)
     if (e.agent_id === undefined) {
@@ -506,7 +506,7 @@ export const register: Register = on => {
     return result
   }).catch(($, e, next) => next(e))
 
-  // 見るだけのフック: 失敗しても StopFailure はそのまま進める
+  // Look-only hook: even when this fails, StopFailure goes ahead
   on('classic.StopFailure', async ($, e, next) => {
     const result = await next(e)
     if (e.error === 'rate_limit' && e.agent_id === undefined) await stopped($, state)

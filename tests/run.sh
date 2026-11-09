@@ -160,7 +160,7 @@ case "$1" in
         ;;
     render)
         printf 'X['
-        bash -c "$(cat "$d")"
+        bash "$d"
         printf ']'
         ;;
 esac
@@ -309,8 +309,10 @@ cp_run() {
 }
 
 render() {
+    local cmd
+    cmd="$(jq -r .statusLine.command "$S")"
     printf '{"model":{"display_name":"x"},"workspace":{"current_dir":"/tmp"}}' |
-        in_home tmo 5 bash -c "$(jq -r .statusLine.command "$S")"
+        in_home tmo 5 bash -c "$cmd"
 }
 
 our_jobs() {

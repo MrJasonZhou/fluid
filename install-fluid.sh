@@ -233,7 +233,7 @@ write_passthrough() {
         printf 'state=%q\n' "$STATE"
         echo 'if [[ "${1:-}" == statusline ]]; then'
         echo '    orig="$state/${2:-claude}/original-statusline-command"'
-        echo '    [[ -s "$orig" ]] && exec bash -c "$(cat "$orig")"'
+        echo '    [[ -s "$orig" ]] && exec bash "$orig"'
         echo 'fi'
     } > "$tmp"
 

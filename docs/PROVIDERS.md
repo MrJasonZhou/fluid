@@ -45,6 +45,7 @@ the rest have defaults.
 | `<id>_cheap_model` | — | the cheapest model worth warming up with; empty to let the agent choose |
 | `<id>_auth_failed` | warmup output on stdin | exit 0 only when the login is really gone and someone must sign in again |
 | `<id>_auth_expiring` | warmup output on stdin | exit 0 when a working login says it will end soon; optional |
+| `<id>_retry_at` | warmup output on stdin | the epoch second a usage limit lifts, when the output says; the core waits until then instead of retrying |
 | `<id>_unknown_model` | warmup output on stdin | exit 0 when the failure is a model the agent no longer knows |
 | `<id>_pull_limits` | — | the agent's own JSON, for agents that cannot push (see below) |
 

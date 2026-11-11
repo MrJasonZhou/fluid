@@ -739,6 +739,13 @@ default_auth_expiring() {
     return 1
 }
 
+# When an agent's usage limit lifts, as an epoch second, if its warmup
+# output says so; nothing when it does not
+default_retry_at() {
+    cat >/dev/null
+    return 1
+}
+
 default_warmup() {
     return 1
 }
@@ -1569,6 +1576,16 @@ do_warmup() {
         return 1
     fi
 
+    # An agent that says when its limit lifts (the long window, usually, read
+    # long ago) is not asked again every ten minutes until then
+    local retry_at
+    retry_at="$(printf '%s\n' "$output" | provider_call "$id" retry_at)"
+    if [[ "$retry_at" =~ ^[0-9]+$ ]] && (( retry_at > now )); then
+        log "[$id] Usage limit until $(fmt_time "$retry_at" '+%Y-%m-%d %H:%M'); warming up after that"
+        arm_job "$id" "$((retry_at + 15))" "limit-reset"
+        return 1
+    fi
+
     local failures delay
     failures="$(pget "$id" failure_count)"
     [[ "$failures" =~ ^[0-9]+$ ]] || failures=0
@@ -2018,6 +2035,27 @@ codex_pull_limits() {
     reverse_lines "$newest" |
         jq -cR 'fromjson? | select(.payload.rate_limits != null) | {rate_limits: .payload.rate_limits}' 2>/dev/null |
         head -1
+}
+
+# "try again at 8:33 PM" when the limit lifts today, or
+# "try again at Nov 12th, 2026 8:33 PM" when later
+codex_retry_at() {
+    local when
+    when="$(grep -Eo 'try again at [^.]*[AP]M' | head -1 | awk -v today="$(date +%Y-%m-%d)" '{
+        sub(/.*try again at /, "")
+        n = split($0, f, /[ ,]+/)
+        split(f[n - 1], hm, ":")
+        h = hm[1] % 12 + (f[n] == "PM" ? 12 : 0)
+        d = today
+        if (n >= 5) {
+            m = index("JanFebMarAprMayJunJulAugSepOctNovDec", f[1])
+            if (!m) exit
+            d = sprintf("%04d-%02d-%02d", f[3], (m + 2) / 3, f[2] + 0)
+        }
+        printf "%s %02d:%s\n", d, h, hm[2]
+    }')"
+    [[ -n "$when" ]] || return 1
+    parse_time "$when"
 }
 
 # Read-only, and with no session files left behind where this codex can do

@@ -126,6 +126,8 @@ pwd > "$CP_TEST/codex-cwd"
 case "$(cat "$CP_TEST/codex-mode" 2>/dev/null)" in
     # An agent that leaves a child running in the background after it exits
     child) sleep 5 </dev/null >/dev/null 2>&1 & ;;
+    # Out of quota, with codex's own wording of when it comes back
+    limited) echo "ERROR: You've hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro) or try again at $(cat "$CP_TEST/codex-limit")."; exit 1 ;;
 esac
 echo codex-ok
 EOF
@@ -947,6 +949,18 @@ echo child > "$CP_TEST/codex-mode"
 cp_run warmup codex >/dev/null 2>&1
 cp_run warmup codex >/dev/null 2>&1
 check "a child left behind does not skip the next warmup" '[[ $(( $(wc -l < "$CP_TEST/codex-runs") )) == 2 ]]'
+
+# A limit that says when it lifts is waited out, not retried every ten minutes
+echo limited > "$CP_TEST/codex-mode"
+LIFT="$(( $(date +%s) / 60 * 60 + 2 * 86400 ))"
+# codex writes English month names whatever the locale
+fmt_lift() { if [[ "$(uname)" == Darwin ]]; then LC_ALL=C date -r "$LIFT" "$1"; else LC_ALL=C date -d "@$LIFT" "$1"; fi; }
+day="$(fmt_lift +%d)"; day="${day#0}"
+case "$day" in 1|21|31) sfx=st ;; 2|22) sfx=nd ;; 3|23) sfx=rd ;; *) sfx=th ;; esac
+echo "$(fmt_lift +%b) $day$sfx, $(fmt_lift +%Y) $(fmt_lift +%I:%M | sed 's/^0//') $(fmt_lift +%p)" > "$CP_TEST/codex-limit"
+cp_run warmup codex >/dev/null 2>&1
+check "a usage limit waits for the time codex gives" '[[ $(cat "$BASE/state/codex/at_reason") == limit-reset && $(cat "$BASE/state/codex/at_target") == $(( LIFT + 15 )) ]]'
+check "and is not counted as a failure"             '[[ $(cat "$BASE/state/codex/failure_count" 2>/dev/null || echo 0) == 0 ]]'
 install_cp uninstall >/dev/null
 
 # ======================================================================

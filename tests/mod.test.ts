@@ -8,7 +8,7 @@
 import { describe, expect, mock, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 import type { On, SessionRateLimit } from 'claude-code'
-import { GRACE_MS, MAX_ATTEMPTS, NOTIFY_RETRY_MS, RESTART_CHECK_MS, RESTART_IDLE_MS, TICK_MS, VERIFY_MS, hasLiveClient, isNewer, parseVersion, stamp, resetAt, toReading } from '../hooks/register'
+import { GRACE_MS, MAX_ATTEMPTS, NOTIFY_RETRY_MS, RESTART_CHECK_MS, RESTART_IDLE_MS, RESTART_STUCK_MS, TICK_MS, VERIFY_MS, hasLiveClient, isNewer, parseVersion, stamp, resetAt, toReading } from '../hooks/register'
 
 const T0 = Date.parse('2026-10-15T00:00:00Z')
 const BIN = '/home/u/.fluid/fluid.sh'
@@ -25,6 +25,8 @@ type World = {
   clock: ReturnType<typeof mock.clock>
   // Called each time the prompt box is read, before answering
   onRead?: () => Promise<void>
+  // A shell script containing this is refused, so the call rejects
+  denyScript?: string
   // Called each time a prompt is sent, before answering
   onSubmit?: () => Promise<void>
   // Fail this many notifications
@@ -67,6 +69,7 @@ function world(on: On, limits: SessionRateLimit[] = [], env: Record<string, stri
   on('process.run', (_$, e) => {
     if (e.argv[0] === 'sh') {
       const script = e.argv[2] ?? ''
+      if (w.denyScript !== undefined && script.includes(w.denyScript)) return { deny: 'boom' }
       w.scripts.push(script)
       w.scriptArgs.push(e.argv.slice(4))
       const stdout = script.includes('TMUX_PANE') ? w.tmux.pane
@@ -516,6 +519,33 @@ describe('restart to update', () => {
     expect(held().length).toBe(2)
     expect(held()[1]).toMatch(/the prompt box is not empty$/)
     expect(respawns(w)).toEqual([])
+  })
+
+  test('a check that fails says so in the log, once until one gets through', async ($, on) => {
+    const w = world(on, [], { AUTO_RESTART_TO_UPDATE: 'on' })
+    const said = () => w.runs.filter(r => r.argv[1] === 'log' && /^Restart to update:/.test(r.argv[3] ?? '')).map(r => r.argv[3])
+    w.tmux = { ...NEWER }
+    w.denyScript = 'list-clients'
+    await idle($, w, IDLE + 3 * RESTART_CHECK_MS)
+    expect(said().length).toBe(1)
+    expect(said()[0]).toMatch(/^Restart to update: a check failed: .*boom/)
+    expect(respawns(w)).toEqual([])
+    w.denyScript = undefined
+    await w.clock.advance(RESTART_CHECK_MS)
+    expect(respawns(w).length).toBe(1)
+  })
+
+  test('a check that never returns does not stop the ones after it', async ($, on) => {
+    const w = world(on, [], { AUTO_RESTART_TO_UPDATE: 'on' })
+    const said = () => w.runs.filter(r => r.argv[1] === 'log' && /^Restart to update:/.test(r.argv[3] ?? '')).map(r => r.argv[3])
+    w.tmux = { ...NEWER }
+    w.onRead = () => new Promise<void>(() => {})
+    await idle($, w)
+    expect(RESTART_STUCK_MS).toBeLessThan(RESTART_CHECK_MS)
+    w.onRead = undefined
+    await w.clock.advance(RESTART_CHECK_MS)
+    expect(said()).toEqual(['Restart to update: a check never finished; starting over'])
+    expect(respawns(w).length).toBe(1)
   })
 
   test('a session that took a Remote Control prompt comes back with Remote Control', async ($, on) => {

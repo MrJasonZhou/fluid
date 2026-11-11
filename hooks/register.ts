@@ -260,6 +260,10 @@ export const RESTART_IDLE_MS = 10 * 60_000
 // A session never tries a restart onto the same version twice within this
 // window, so a claude on PATH other than the running one cannot loop
 export const RESTART_RETRY_MS = 6 * 60 * 60_000
+// A check still going after this long is taken as stuck: the next tick starts
+// over instead of skipping, so one call that never returns cannot end restart
+// to update for the rest of the session
+export const RESTART_STUCK_MS = 2 * 60_000
 
 type Restart = {
   isTurnRunning: boolean
@@ -268,6 +272,11 @@ type Restart = {
   // session is waiting for
   hasPendingWork?: boolean
   isChecking?: boolean
+  checkStartedAt?: number
+  // Which check owns isChecking: one taken as stuck must not clear it for the next
+  checkId?: number
+  // The last problem written to fluid's log, so a repeating one is written once
+  reported?: string
   // Dry mode logs each target version once
   loggedFor?: string
   // What held the restart back, already logged for this target version
@@ -410,15 +419,32 @@ async function restartCheck($: EngineInterface, restart: Restart) {
 
 // One check at a time; a failure is logged to the debug log and dropped, so
 // this can do nothing but never stop a session
+// A check that fails or never comes back is written to fluid's log, once until
+// a check gets through, so a session left on an old build says why
+function report($: EngineInterface, restart: Restart, problem: string) {
+  if (restart.reported === problem) return
+  restart.reported = problem
+  void fluid($, ['log', 'claude', `Restart to update: ${problem}`])
+}
+
 async function restartTick($: EngineInterface, restart: Restart) {
-  if (restart.isChecking) return
+  const now = await $.clock.now()
+  if (restart.isChecking) {
+    if (now - (restart.checkStartedAt ?? now) < RESTART_STUCK_MS) return
+    report($, restart, 'a check never finished; starting over')
+  }
+  const id = (restart.checkId ?? 0) + 1
+  restart.checkId = id
   restart.isChecking = true
+  restart.checkStartedAt = now
   try {
     await restartCheck($, restart)
+    if (restart.checkId === id) restart.reported = undefined
   } catch (err) {
     $.ui.log(`restart to update: check failed: ${String(err)}`, { to: 'debug' })
+    report($, restart, `a check failed: ${String(err)}`)
   } finally {
-    restart.isChecking = false
+    if (restart.checkId === id) restart.isChecking = false
   }
 }
 

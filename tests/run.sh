@@ -990,6 +990,17 @@ printf '# owner=someoneelse\n/home/someoneelse/.fluid/fluid.sh scheduled claude\
 printf '{"rate_limits":{"five_hour":{"used_percentage":10,"resets_at":%s}}}' "$(( $(date +%s) + 7200 ))" |
     cp_run observe claude mod
 check "a reused job number of another user's is left alone" '[[ -e "$QUEUE/$other" && $(cat "$BASE/state/claude/at_job") != "$other" ]]'
+
+# Antigravity reports the reset as "now" for minutes after a warmup opened a
+# window; that must not set off another warmup
+printf '{"rate_limits":{"five_hour":{"used_percentage":10,"resets_at":%s}}}' "$(( $(date +%s) + 7200 ))" | cp_run observe claude mod
+date +%s > "$BASE/state/claude/last_run"
+before="$(cat "$BASE/state/claude/at_target")"
+printf '{"rate_limits":{"five_hour":{"used_percentage":0,"resets_at":%s}}}' "$(( $(date +%s) - 10 ))" | cp_run observe claude mod
+check "a reset already past just after a run plans nothing" '[[ $(cat "$BASE/state/claude/at_target") == "$before" ]]'
+echo $(( $(date +%s) - 3600 )) > "$BASE/state/claude/last_run"
+printf '{"rate_limits":{"five_hour":{"used_percentage":0,"resets_at":%s}}}' "$(( $(date +%s) - 10 ))" | cp_run observe claude mod
+check "but one long after a run does"  '[[ $(cat "$BASE/state/claude/at_reason") == official-reset && $(cat "$BASE/state/claude/at_target") != "$before" ]]'
 install_cp uninstall >/dev/null
 
 # ======================================================================

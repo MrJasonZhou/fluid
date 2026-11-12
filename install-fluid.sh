@@ -1395,6 +1395,17 @@ observe() {
 
     reset="$(pget "$id" resets_at)"
 
+    # A reset already past, minutes after a run warmed up, is the agent not
+    # yet counting the window that run opened: Antigravity keeps reporting
+    # the reset as "now" for a few minutes. Acting on it warms up again
+    # every few seconds; the run has planned the next window already.
+    local ran
+    ran="$(pget "$id" last_run)"
+    if [[ "$reset" =~ ^[0-9]+$ && "$ran" =~ ^[0-9]+$ ]] &&
+       (( reset <= $(date +%s) && $(date +%s) - ran < 600 )); then
+        reset=""
+    fi
+
     if [[ "$reset" =~ ^[0-9]+$ ]] && provider_can "$id" keep; then
         # Trust the reported reset time, plus 15s of slack
         arm_window "$id" "$((reset + 15))" "official-reset"
